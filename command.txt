@@ -1,0 +1,7 @@
+# 기본 실행 명령어
+CUDA_VISIBLE_DEVICES=4,5,6 python -m torch.distributed.launch --use_env --nproc_per_node 3 run.py
+
+
+# 기본 실행 명령어 - torchrun은 파이토치 1.11.0부터 지원이 된다고함.
+# torchrun --nproc_per_node <num_gpu> run.py
+
