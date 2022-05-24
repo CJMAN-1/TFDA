@@ -43,7 +43,7 @@ pip install -r requirements.txt
 This project use multi-gpu by using elastic launch ([torchrun](https://pytorch.org/docs/stable/elastic/run.html)), if not familiar with Torchrun, please check this [documentation](https://pytorch.org/docs/stable/distributed.elastic.html).
 
 ```bash
-torchrun --nproc_per_node <num_gpu> run.py
+python -m torch.distributed.launch --use_env --nproc_per_node <num_gpu> run.py
 ```
 
 ## Acknowledgement
