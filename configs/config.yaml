@@ -2,7 +2,7 @@ defaults:
   - _self_
   - log_dir: default.yaml
   - logger: Tensorboard.yaml
-  - model: ExampleNet.yaml
+  - model: Segformer.yaml
   - source_dataset: GTA5.yaml
   - target_dataset: Cityscapes.yaml
   - data_loader: default.yaml
@@ -13,18 +13,18 @@ defaults:
 work_dir: ${hydra:runtime.cwd}
 data_dir: ${work_dir}/datasets/
 
-# experiment description
+# expriment information
 ex: "test"
-descrtiption: "여기는 이 실험에 대한 설명을 적을 수 있는 부분 입니다
-근데 출력은 한줄로 된답니다"
+descrtiption: "test"
 
-# model
+# training
 checkpoint_file: null
 max_iteration: 1000000
-eval_freq: 10
-
+eval_interval: 500
+tensor_interval: 100 
 # dataset
-img_size: [1024, 2048]
+img_size: [512, 1024]
+class_num: 19
 
 # environment variable
 rand_seed: 3621

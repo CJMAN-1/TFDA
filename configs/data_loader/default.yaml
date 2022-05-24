@@ -1,11 +1,11 @@
 train:
-  batch_size: 1
+  batch_size: 2
   pin_memory: True
   persistent_workers: True
   num_workers: 16
   prefetch_factor: 1
 
 val:
-  batch_size: 10
+  batch_size: 1
   persistent_workers: False
   num_workers: 1

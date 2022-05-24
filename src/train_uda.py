@@ -4,6 +4,7 @@ from typing import Tuple, Any
 
 import hydra
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from omegaconf import DictConfig
 from torch.cuda.amp import GradScaler, autocast
@@ -11,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
-
+from src.utils.losses import *
 from src import utils
 
 LOG = utils.get_logger(__name__)
@@ -27,12 +28,11 @@ def train(config: DictConfig, local_rank: int) -> None: # local_rank : 한개의
     if config.get("checkpoint_file") and os.path.isfile(config.checkpoint_file):
         LOG.info("Load a trained model.")
         model, criterion, optimizer = load_model(
-            config.checkpoint_file, config.model, local_rank
-        )
+            config.checkpoint_file, config.model, local_rank)
     else:
         LOG.info("There is no trained model, Initialize a new model.")
         model, criterion, optimizer = init_model(config.model, local_rank)
-    
+
     # Initialize dataloaders
     origin_loader = {}
     origin_loader['S_t'], origin_loader['T_t'], origin_loader['T_v'] = init_data_loader(config)
@@ -52,14 +52,19 @@ def train(config: DictConfig, local_rank: int) -> None: # local_rank : 한개의
         batch = get_batch(loader, origin_loader, local_rank)
         
         # Compute output # TODO : segformer 모델 포팅
-        outputs = model(batch)
-        loss = criterion(outputs, label)
+        output = model(batch['S_t']['img'])
+        print(output.size())
+        print(batch['S_t']['label'].size())
+        output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
 
+        loss = criterion(output, batch['S_t']['label'])
+        print(loss)
+        assert 0
         # Compute gradient & optimizer step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
+        
         # TODO : add tensorboard
         
         if iteration % config.eval_freq == 0:
@@ -122,14 +127,17 @@ def init_model(config: DictConfig, local_rank: int) -> Tuple[Any, Any, Any]:
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
     # criterion
-    criterion = torch.nn.CrossEntropyLoss()
-
+    loss_set = Losses()
+    criterion = getattr(loss_set, config.loss.type)
+    
     # optimizer
-    optimizer = torch.optim.AdamW(
-        params=model.parameters(),
-        lr=config.optimizer.lr,
-        weight_decay=config.optimizer.weight_decay,
-    )
+    if config.optimizer.type == 'AdamW':
+        optimizer = torch.optim.AdamW(
+            params = model.parameters(),
+            lr = config.optimizer.lr,
+            betas = tuple(config.optimizer.betas),
+            weight_decay = config.optimizer.weight_decay
+        )
     return model, criterion, optimizer
 
 

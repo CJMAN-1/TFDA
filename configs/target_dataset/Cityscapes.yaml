@@ -7,5 +7,5 @@ train:
 val:
   _target_: src.datasets.Cityscapes.Cityscapes
   img_list_path: ${data_dir}/Cityscapes/list/val_imgs.txt
-  label_list_path: ${data_dir}/GTA5/list/val_labels.txt
+  label_list_path: ${data_dir}/Cityscapes/list/val_labels.txt
   img_size: ${img_size}

@@ -29,6 +29,15 @@ def set_dist_func(func: Callable[[DictConfig, int], None]):
 
     return nested_func
 
+def ddp_init():
+    torch.distributed.init_process_group(backend="nccl", init_method="env://")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+
+def ddp_del():
+    torch.distributed.destroy_process_group()
+
+
 
 # --------- decorator --------- #
 

@@ -1,10 +1,40 @@
 architecture:
-  _target_: src.models.ExampleNet.ExampleNet
+  _target_: src.models.segmentors.Segformer.Segformer
 
-  cv1_ch: 32
-  cv2_ch: 64
-  output_size: 10
+  
+  backbone:
+    _target_: src.models.backbones.mix_transformer.mit_b5
+    
+  decode_head:
+    _target_: src.models.decode_heads.segformer_head.SegFormerHead
+    in_channels: [64, 128, 320, 512]
+    in_index: [0,1,2,3]
+    feature_strides: [4,8,16,32]
+    dropout_ratio: 0.1
+    num_classes: ${class_num}
+    norm: SyncBN
+    align_corners: False
+    decoder_params:
+      embed_dim: 256
+  pretrained_backbone: pretrained/mit/mit_b5.pth
+  pretrained_decode_head: #pretrained/something.pth
+
+loss:
+  type: CrossEntropy2d #losses.py에 있는 함수이름 작성
+  use_sigmoid: False
+  loss_weight: 1.0
+  
 
 optimizer:
-  lr: 1e-4
-  weight_decay: 0.99
+  type: AdamW
+  lr: 6e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+lr_scheduler:
+  policy: poly
+  warmup: linear
+  warmup_iters: 1500
+  warmup_ratio: 1e-6
+  power: 1.0
+  min_lr: 0.0
