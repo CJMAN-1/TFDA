@@ -5,55 +5,193 @@ import torchvision
 import torch.nn.functional as F
 import torch
 import logging
+from src.utils.losses import *
+from src.utils import get_logger
+import os
 
 class Mtdtnet(nn.Module):
     def __init__(self,
-                 encoder,
-                 generator,
-                 st_encoder,
-                 discrminator,
-                 domain_transfer,
-                 label_embed,
-                 datasets,  # 0: source 1~: targets
-                 pretrained_mtdtnet=None):
+                architecture,
+                loss,
+                datasets,  # 0: source 1~: targets
+                pretrained_mtdtnet=None):
         super(Mtdtnet, self).__init__()
-        self.encoder = encoder
-        self.generator = generator
-        self.st_encoder = st_encoder
-        self.discrminator = discrminator
-        self.domain_transfer = domain_transfer
-        self.label_embed = label_embed
+        self.encoder = architecture.encoder
+        self.generator = architecture.generator
+        self.st_encoder = architecture.st_encoder
+        self.discrminator = architecture.discrminator
+        self.domain_transfer = architecture.domain_transfer
+        self.label_embed = architecture.label_embed
         self.datasets = datasets
-        self.converts = [ f'{datasets[0]}2{t}'for t in datasets[1:] ]
-        print(self.datasets)
-        print(self.converts)
-        assert 0
+        self.source = self.datasets[0]
+        self.targets = self.datasets[1:]
+        self.converts = [self.source+'2'+target for target in self.targets]
 
         self.init_weights(pretrained_mtdtnet)
+
+
+        ### logger
+        self.LOG = get_logger(__name__)
+
+
+        ### criterion
+        self.local_rank = int(os.environ["LOCAL_RANK"])
+        self.loss_set = Mtdt_losses(self.local_rank, self.datasets)
+        self.loss_weights = {}
+
+        self.LOG.info(f'losses of I2I model: {loss.type}')
+        for name, w in zip(loss.type, loss.weight):
+            self.loss_weights[name] = w
+        
     
     def init_weights(self, pretrained=None):
-        logger = logging.getLogger()
+        
         if pretrained is not None:
-            logger.info(f'load mtdtnet from: {pretrained}')
+            self.LOG.info(f'load mtdtnet from: {pretrained}')
             self.load_state_dict(torch.load(pretrained))
 
-    def _forward_train(self, imgs, labels):
-        direct_recon, indirect_recon = dict(), dict()
+    def _forward_train(self, imgs, labels, return_imgs=True):
+        ### train generator
+        loss_g, d_recons, id_recon, cvt_imgs = self._train_gen(imgs, labels)
+
+        ### train discriminator
+        loss_d = self._train_dis(imgs, labels)
+        
+        if return_imgs:
+            for k, img in d_recons.items():
+                d_recons[k] = img.detach()
+            for k, img in id_recon.items():
+                id_recon[k] = img.detach()
+            for k, img in cvt_imgs.items():
+                cvt_imgs[k] = img.detach()
+            return loss_d, loss_g, d_recons, id_recon, cvt_imgs
+        else:
+            return loss_d, loss_g
+
+        
+    def _forward_infer(self, imgs, labels):
+        raise NotImplementedError
+
+
+    def forward(self, imgs, labels, mode=None, return_imgs=True):
+        '''
+        imgs : dict()
+        labels : dict()
+        mode : 'train' or 'infer'
+        return_imgs : boolean. return images(direct recon, indirect recon, cvt_imgs) during training
+        '''
+
+        if mode == 'train' or mode is None:
+            return self._forward_train(imgs, labels, return_imgs)
+        elif mode == 'infer':
+            return self._forward_infer(imgs, labels)
+
+
+    def _train_dis(self, imgs, labels):
+        ### init variables
+        loss_dis = 0
+        loss = dict()
+        D_outputs_real, D_outputs_fake = dict(), dict()
         converted_imgs = dict()
+        gamma, beta = dict(), dict()
+        
+        ### set disciminator requires_grd to True
+        self.discrminator.requires_grad_(True)
+        self.encoder.requires_grad_(False)
+        self.generator.requires_grad_(False)
+        self.st_encoder.requires_grad_(False)
+        self.label_embed.requires_grad_(False)
+        self.domain_transfer.requires_grad_(False)
+        
+        self.discrminator.zero_grad()
+        
+
+        ### forward real target images
+        for dset in self.datasets:
+            if dset in self.targets:
+                D_outputs_real[dset] = self.discrminator(self._slice_patches(imgs[dset]))
+
+        ### forward fake(converted source -> target) images
+        gamma[self.source], beta[self.source] = self.st_encoder(imgs[self.source])
+        for convert in self.converts:
+            with torch.no_grad():
+                source, target = convert.split('2')
+                gamma[convert], beta[convert] = self.domain_transfer(gamma[source], beta[source], target=target)
+                converted_imgs[convert] = self.generator(gamma[convert]*self.label_embed(labels[source]) + beta[convert])
+            D_outputs_fake[convert] = self.discrminator(self._slice_patches(converted_imgs[convert]))
+            
+        loss['Gan_d'] = self.loss_set.Gan_d(D_outputs_real, D_outputs_fake, self.targets)
+        loss_dis = loss['Gan_d'] * self.loss_weights['Gan_d']
+
+        return loss_dis
+
+
+    def _train_gen(self, imgs, labels):
+        ### init variables
+        loss_gen = 0
+        loss = {}
+        d_recons, id_recon = dict(), dict()
+        cvt_imgs = dict()
         gamma, beta = dict(), dict()
         features = dict()
         D_outputs_fake = dict()
-        
-        pass
-    
-    def _forward_infer(self, imgs, labels):
-        pass
 
-    def forward(self, imgs, labels, mode=None):
-        if mode == 'train' or mode is None:
-            return self._forward_train(imgs, labels)
-        elif mode == 'infer':
-            return self._forward_infer(imgs, labels)
+        ### set discriminator requires_grad to false
+        self.discrminator.requires_grad_(False)
+        self.encoder.requires_grad_(True)
+        self.generator.requires_grad_(True)
+        self.st_encoder.requires_grad_(True)
+        self.label_embed.requires_grad_(True)
+        self.domain_transfer.requires_grad_(True)
+        self.encoder.zero_grad()
+        self.generator.zero_grad()
+        self.st_encoder.zero_grad()
+        self.label_embed.zero_grad()
+        self.domain_transfer.zero_grad()
+
+        ### direct recon (for all domains)
+        for dset in self.datasets:
+            features[dset] = self.encoder(imgs[dset])
+            d_recons[dset] = self.generator(features[dset])
+        
+        ### indirect recon (only source domain)
+        with torch.no_grad():
+            for dset in self.datasets:
+                features[dset] = self.encoder(imgs[dset])
+                if dset in self.targets:
+                    self.domain_transfer.update(features[dset], dset)
+        gamma[self.source], beta[self.source] = self.st_encoder(imgs[self.source])
+        id_recon[self.source] = self.generator(gamma[self.source]*self.label_embed(labels[self.source]) + beta[self.source])
+        
+        ### converted image & discriminator output (source -> targets)
+        for convert in self.converts:
+            source, target = convert.split('2')
+            gamma[convert], beta[convert] = self.domain_transfer(gamma[source], beta[source], target=target)
+            cvt_imgs[convert] = self.generator(gamma[convert]*self.label_embed(labels[source]) + beta[convert])
+            D_outputs_fake[convert] = self.discrminator(self._slice_patches(cvt_imgs[convert]))
+        
+        ### compute loss
+        loss['Gan_g'] = self.loss_set.Gan_g(D_outputs_fake)
+        loss['Direct_recon'] = self.loss_set.Direct_recon(imgs, d_recons)
+        loss['Indirect_recon'] = self.loss_set.Indirect_recon(imgs[self.source], id_recon[self.source])
+        loss['Consis'] = self.loss_set.Consis(imgs[self.source], cvt_imgs)
+        loss['Style'] = self.loss_set.Style(imgs, cvt_imgs)
+        
+        for k, v in loss.items():
+            if k not in ['Gan_d']:
+                loss_gen += v * self.loss_weights[k]
+            
+        return loss_gen, d_recons, id_recon, cvt_imgs
+
+
+    def _slice_patches(self, imgs, hight_slice=2, width_slice=4):
+        b, c, h, w = imgs.size()
+        h_patch, w_patch = int(h / hight_slice), int(w / width_slice)
+        patches = imgs.unfold(2, h_patch, h_patch).unfold(3, w_patch, w_patch)
+        patches = patches.contiguous().view(b, c, -1, h_patch, w_patch)
+        patches = patches.transpose(1,2)
+        patches = patches.reshape(-1, c, h_patch, w_patch)
+        return patches
 
 class Encoder(nn.Module):
     def __init__(self, channels=3):
@@ -148,7 +286,7 @@ class Multi_Head_Discriminator(nn.Module):
         )
 
         self.fc = nn.Sequential(
-            spectral_norm(nn.Linear(67*60*128, 500)),
+            spectral_norm(nn.Linear(64*64*128, 500)),
             nn.ReLU(),
             spectral_norm(nn.Linear(500, num_domains))
         )
@@ -208,7 +346,7 @@ class Label_Embed(nn.Module):
         self.embed = nn.Conv2d(1, 64, 1, 1, 0)
     
     def forward(self, seg):
-        return self.embed(F.interpolate(seg.unsqueeze(1).float(), size=(270, 480), mode='nearest'))
+        return self.embed(F.interpolate(seg.unsqueeze(1).float(), size=(256, 512), mode='nearest'))
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, filters=64, kernel_size=3, stride=1, padding=1):

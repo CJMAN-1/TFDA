@@ -2,7 +2,7 @@ defaults:
   - _self_
   - log_dir: default.yaml
   - logger: Tensorboard.yaml
-  - model: Segformer.yaml
+  - seg_model: Segformer.yaml
   - source_dataset: GTA5.yaml
   - target_dataset: Cityscapes.yaml
   - data_loader: default.yaml
@@ -15,16 +15,19 @@ data_dir: ${work_dir}/datasets/
 
 # expriment information
 ex: "test"
-descrtiption: "test"
+description: "test"
 
 # training
-checkpoint_file: null
+seg_pretrained: "pretrained/segformer/segformer_mitb5_46.92.pth"
 max_iteration: 1000000
 eval_interval: 500
-tensor_interval: 100 
+tensor_interval: 100
+
 # dataset
 img_size: [512, 1024]
 class_num: 19
 
 # environment variable
 rand_seed: 3621
+master_addr: 127.0.0.1
+master_port: 29500

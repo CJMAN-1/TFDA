@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from src import utils
-from src.utils.losses import Losses
+from src.utils.losses import *
 from src.utils import metric
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
@@ -21,13 +21,20 @@ from prettytable import PrettyTable
 import torchvision
 from time import sleep
 from src.trainer.base_trainer import Base_trainer
+from src.utils.optimizers import get_optimizer
+from itertools import chain
 
 
-
-class Seg_trainer(Base_trainer):
+class UDA_mtdt_trainer(Base_trainer):
     def __init__(self, config):
-        super(Seg_trainer, self).__init__()
+        super(UDA_mtdt_trainer, self).__init__(config)
         self.config = config
+        ### Initialize etc variables
+        self.best_miou = 0
+        self.datasets = [self.config.source_data, self.config.target_data]
+        self.source = self.config.source_data
+        self.target = self.config.target_data
+
         ### Logger
         self.LOG = utils.get_logger(__name__)
 
@@ -36,72 +43,115 @@ class Seg_trainer(Base_trainer):
             utils.set_seed(config.rand_seed)
 
         ### Initialize model
-        if config.get("checkpoint_file") and os.path.isfile(config.checkpoint_file):
-            self.LOG.info("Load a trained model.")
-            self.model, self.criterion, self.optimizer = self.load_model(
-                config.checkpoint_file, config.model, self.local_rank)
+            ### segmentation model
+        if config.get("seg_pretrained") and os.path.isfile(config.seg_pretrained):
+            self.LOG.info(f"Load a trained segmentation model from {config.seg_pretrained}.")
+            self.seg_model, self.seg_loss_set, self.seg_optimizer = self.load_seg_model(
+                config.seg_pretrained, config.seg_model)
         else:
-            self.LOG.info("There is no trained segmentor model, Initialize a new model.")
-            self.model, self.criterion, self.optimizer = self.init_model(config.model)
+            self.LOG.info("There is no trained segmentation model, Initialize a new model.")
+            self.seg_model, self.seg_loss_set, self.seg_optimizer = self.init_seg_model(config.seg_model)
 
-        # Initialize dataloaders
+            ### I2I model
+        if config.get("i2i_pretrained") and os.path.isfile(config.i2i_pretrained):
+            self.LOG.info(f"Load a trained I2I model from {config.i2i_pretrained}.")
+            self.i2i_model, self.i2i_optimizers = self.load_i2i_model(
+                config.i2i_pretrained, config.i2i_model, self.local_rank)
+        else:
+            self.LOG.info("There is no trained I2I model, Initialize a new model.")
+            self.i2i_model, self.i2i_optimizers = self.init_i2i_model(config.i2i_model)
+
+        ### Initialize dataloaders
         self.origin_loader = {}
         self.origin_loader['S_t'], self.origin_loader['T_t'], self.origin_loader['T_v'] = self.init_data_loader(config)
         
-
         self.loader = {}
         for k, v in self.origin_loader.items():
             self.loader[k] = iter(v)
 
-        # Initialize a tensorboard (only zero rank)
+        ### Initialize a tensorboard (only zero rank)
         self.writer = hydra.utils.instantiate(config.logger) if self.local_rank == 0 else None # log는 local rank가 0인 애로만 작성. 이래도 아무 상관 없나?
+        self.valid_class = self.origin_loader['T_v'].dataset.validclass_name
 
-        # Initialize etc variables
-        self.best_miou = 0
+        
+        # if self.local_rank == 0: => 이거 했는데 다 똑같은 색깔로만 나옴.. 개열받음
+        #     iou_class = ['iou/'+name for name in self.valid_class]
+        #     layout = {'Common values': {'iou':['Multiline', iou_class]}}
+        #     self.writer.add_custom_scalars(layout)
 
 
     def __del__(self):
-        super(Seg_trainer, self).__del__()
+        super(UDA_mtdt_trainer, self).__del__()
 
-        if self.writer:
+        if self.writer is not None:
             self.writer.close()
 
 
     def train(self) -> None: # self.local_rank : 한개의 머신(gpu가 달린 컴퓨터) 안에 있는 process의 인덱스, global_rank도 있는데 그건 머신이 여러개 있을 경우에 의미가 있음.   
         dist.barrier()
         self.LOG.info("All ranks are ready to train.")
-        for iteration in tqdm(range(1, self.config.max_iteration+1), desc=self.config.ex+'| Training'):
-            self.model.train()
+        if 0 and self.local_rank == 0:
+            self.LOG.info("source only performance.")
+            _, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
+            self.log_performance(iou, self.valid_class)
+            self.plot_tensor_perform(iou, self.valid_class, 0)
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        for iteration in tqdm(range(1, self.config.max_iteration), desc=self.config.ex+'| Training'):
+            self.seg_model.train()
+            self.i2i_model.train()
             batch = self.get_batch(self.loader)
+            ### I2I - Compute output
+            imgs, labels = dict(), dict()
+            imgs[self.source], labels[self.source] = batch['S_t']['img'], batch['S_t']['label']
+            imgs[self.target], labels[self.target] = batch['T_t']['img'], batch['T_t']['label']
             
-            ### Compute output
-            output = self.model(batch['S_t']['img'])
+            loss_d, loss_g, d_recons, id_recon, cvt_imgs = self.i2i_model(imgs, labels, mode='train', return_imgs=True)
+
+            ### I2I - Compute gradient & optimizer step
+            loss_d.backward()
+            self.i2i_optimizers['D'].step()
+            self.i2i_optimizers['D'].zero_grad()
+            loss_g.backward()
+            self.i2i_optimizers['G'].step()
+            self.i2i_optimizers['G'].zero_grad()
+
+            ### seg - Compute output
+            output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
+            #output = self.seg_model(batch['S_t']['img'])
             output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-            loss = self.criterion(output, batch['S_t']['label'])
-            
-            ### Compute gradient & optimizer step
-            self.optimizer.zero_grad()
+            loss = self.seg_loss_set.CrossEntropy2d(output, batch['S_t']['label'])
+
+            ### seg - Compute gradient & optimizer step
+            self.seg_model.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            self.seg_optimizer.step()
             
+
             ### Tensorboard
             if iteration % self.config.tensor_interval == 0 and self.local_rank == 0:
                 output = F.log_softmax(output, dim = 1)
                 prediction = torch.argmax(output, dim = 1)
-                self.print_tensor(prediction, batch, iteration)
+                self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, iteration)
 
             ### Evaluation
             if iteration % self.config.eval_interval == 0 and self.local_rank == 0:
-                miou, iou = self.eval(self.config, self.model, self.origin_loader['T_v'])
-                self.print_performance(iou, self.origin_loader['T_v'].dataset.validclass_name)
+                self.LOG.info(f"iteration: {iteration}")
+                miou, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
+                self.log_performance(iou, self.valid_class)
+                self.plot_tensor_perform(iou, self.valid_class, iteration)
 
                 if miou > self.best_miou:
                     self.best_miou = miou
                     self.LOG.info(f'best miou : {self.best_miou:.2f} | miou : {miou:.2f}')
-                    torch.save(self.model.state_dict(), os.path.join(HydraConfig.get().run.dir, 'model.pth'))
-
+                    torch.save(self.seg_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.seg_model.module).__name__}.pth'))
+                    torch.save(self.i2i_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.i2i_model.module).__name__}.pth'))
                 gc.collect()
                 torch.cuda.empty_cache()
+
+            gc.collect()
+            torch.cuda.empty_cache()
 
         self.LOG.info("Finish training.")
 
@@ -124,35 +174,61 @@ class Seg_trainer(Base_trainer):
         return batch
 
 
-    def load_model(self, checkpoint_file: str, config: DictConfig) -> Tuple[Any, Any, Any]:
+    def load_seg_model(self, checkpoint_file: str, config: DictConfig) -> Tuple[Any, Any, Any]:
         # model
-        model, criterion, optimizer = self.init_model(config, self.local_rank)
+        model, loss_set, optimizer = self.init_seg_model(config)
 
         model.load_state_dict(
             torch.load(checkpoint_file, map_location=f"cuda:{self.local_rank}")
         )
 
-        return model, criterion, optimizer
+        return model, loss_set, optimizer
 
 
-    def init_model(self, config) -> Tuple[Any, Any, Any]:
+    def init_seg_model(self, config) -> Tuple[Any, Any, Any]:
         # model
         model = hydra.utils.instantiate(config.architecture).to(self.local_rank)
         model = DDP(model, device_ids=[self.local_rank], find_unused_parameters=False)
 
         # criterion
-        loss_set = Losses()
-        criterion = getattr(loss_set, config.loss.type)
+        loss_set = Base_losses(self.local_rank)
         
         # optimizer
-        if config.optimizer.type == 'AdamW':
-            optimizer = torch.optim.AdamW(
-                params = model.parameters(),
-                lr = config.optimizer.lr,
-                betas = tuple(config.optimizer.betas),
-                weight_decay = config.optimizer.weight_decay
-            )
-        return model, criterion, optimizer
+        optimizer = get_optimizer(config.optimizer, model.parameters())
+        return model, loss_set, optimizer
+
+
+    def load_i2i_model(self, checkpoint_file: str, config: DictConfig) -> Tuple[Any, Any, Any]:
+        # model
+        model, optimizers = self.init_i2i_model(config, self.local_rank)
+
+        model.load_state_dict(
+            torch.load(checkpoint_file, map_location=f"cuda:{self.local_rank}")
+        )
+
+        return model, optimizers
+
+
+    def init_i2i_model(self, config) -> Tuple[Any, Any, Any]:
+        # model
+        model = hydra.utils.instantiate(config.model).to(self.local_rank)
+        model = DDP(model, device_ids=[self.local_rank], find_unused_parameters=True)
+
+        # optimizer
+
+        param_g = model.module.encoder.parameters()
+        param_g = chain(param_g, model.module.generator.parameters())
+        param_g = chain(param_g, model.module.st_encoder.parameters())
+        param_g = chain(param_g, model.module.label_embed.parameters())
+        param_g = chain(param_g, model.module.domain_transfer.parameters())
+
+        pram_d = model.module.discrminator.parameters()
+        optimizers = {}
+        optimizers['G'] = get_optimizer(config.generator_optimizer, param_g)
+        optimizers['D'] = get_optimizer(config.discriminator_optimizer, pram_d)
+       
+
+        return model, optimizers
 
 
     def init_data_loader(self, config: DictConfig) -> Tuple[DataLoader, DataLoader, DataLoader]:
@@ -220,7 +296,7 @@ class Seg_trainer(Base_trainer):
             return miou, iou
 
 
-    def print_performance(self, iou, class_name):
+    def log_performance(self, iou, class_name):
         class_name = class_name + ['mIoU']
         iou = np.append(iou, np.nanmean(iou))
         iou = np.round(iou, 2)
@@ -234,7 +310,7 @@ class Seg_trainer(Base_trainer):
             self.LOG.info('\n'+table.get_string())
         
         
-    def print_tensor(self, prediction, batch, iteration):
+    def plot_tensor_img(self, prediction, batch, d_recons, id_recon, cvt_imgs, iteration):
         with torch.no_grad():
             ### input
             img_grid = torchvision.utils.make_grid(batch['S_t']['img'], normalize=True, value_range=(-1,1))
@@ -245,8 +321,31 @@ class Seg_trainer(Base_trainer):
 
             ### output
             prediction = self.origin_loader['S_t'].dataset.colorize_label(prediction)
-            img_grid = torchvision.utils.make_grid(prediction, normalize=True, value_range=(0,255))
+            img_grid = torchvision.utils.make_grid(prediction, normalize=True, value_range=(-1,1))
             self.writer.add_image('output/prediction', img_grid, iteration)
+
+            ### direct recon
+            for name, img in d_recons.items():
+                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                self.writer.add_image(f'direct recon/{name}', img_grid, iteration)
+            ### indirect recon
+            for name, img in id_recon.items():
+                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                self.writer.add_image(f'indirect recon/{name}', img_grid, iteration)
+
+            ### converted image
+            for name, img in cvt_imgs.items():
+                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                self.writer.add_image(f'converted image/{name}', img_grid, iteration)
 
             ### waiting, 이미지가 저장되는데 시간이 어느정도 필요함.
             sleep(0.5)
+
+
+    def plot_tensor_perform(self, iou, class_name, iteration):
+        with torch.no_grad():
+            for name, value in zip(class_name, iou):
+                self.writer.add_scalar(f'iou/{name}', value, iteration)
+
+
+    

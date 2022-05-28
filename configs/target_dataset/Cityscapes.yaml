@@ -1,11 +1,11 @@
 train:
-  _target_: src.datasets.Cityscapes.Cityscapes
+  _target_: src.dataset.Cityscapes.Cityscapes
   img_list_path: ${data_dir}/Cityscapes/list/train_imgs.txt
   label_list_path: ${data_dir}/GTA5/list/train_labels.txt
   img_size: ${img_size}
 
 val:
-  _target_: src.datasets.Cityscapes.Cityscapes
+  _target_: src.dataset.Cityscapes.Cityscapes
   img_list_path: ${data_dir}/Cityscapes/list/val_imgs.txt
   label_list_path: ${data_dir}/Cityscapes/list/val_labels.txt
   img_size: ${img_size}

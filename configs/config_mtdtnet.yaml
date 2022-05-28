@@ -1,0 +1,37 @@
+defaults:
+  - _self_
+  - log_dir: default.yaml
+  - logger: Tensorboard.yaml
+  - seg_model: Segformer.yaml
+  - i2i_model: Mtdtnet.yaml
+  - source_dataset: GTA5.yaml         # have to modify with source_data below
+  - target_dataset: Cityscapes.yaml   # have to modify with target_data below
+  - data_loader: default.yaml
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+
+# directory
+work_dir: ${hydra:runtime.cwd}
+data_dir: ${work_dir}/datasets/
+
+# expriment information
+ex: "test"
+description: "test"
+
+# training
+seg_pretrained: "pretrained/segformer/segformer_mitb5_46.92.pth"
+i2i_pretrained: null
+max_iteration: 1000000
+eval_interval: 50
+tensor_interval: 10 
+
+# dataset
+source_data: GTA5         # have to modify with source_dataset in defaults
+target_data: Cityscapes   # have to modify with target_dataset in defaults
+img_size: [512, 1024]
+class_num: 19
+
+# environment variable
+rand_seed: 3621
+master_addr: 127.0.0.1
+master_port: 29500

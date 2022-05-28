@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import hydra
 import logging
+from src.utils import get_logger
+
 
 class Segformer(nn.Module):
     def __init__(self,
@@ -28,7 +30,7 @@ class Segformer(nn.Module):
             pretrained (str, optional): Path to pre-trained weights.
                 Defaults to None.
         """
-        logger = logging.getLogger()
+        logger = get_logger(__name__)
         if pre_backbone is not None:
             logger.info(f'load backbone model from: {pre_backbone}')
             self.backbone.init_weights(pretrained=pre_backbone)

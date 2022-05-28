@@ -1,9 +1,9 @@
 train:
-  _target_: src.datasets.GTA5.GTA5
+  _target_: src.dataset.GTA5.GTA5
 
   img_list_path: ${data_dir}/GTA5/list/all_imgs.txt
   label_list_path: ${data_dir}/GTA5/list/all_labels.txt
   img_size: ${img_size}
 
 val:
-  _target_: src.datasets.GTA5.GTA5
+  _target_: src.dataset.GTA5.GTA5
