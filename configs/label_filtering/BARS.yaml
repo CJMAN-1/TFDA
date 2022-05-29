@@ -1,0 +1,4 @@
+_target_: src.models.label_filtering.bars.BARS
+
+datasets: ["${source_data}", "${target_data}"]
+class_num: ${class_num}

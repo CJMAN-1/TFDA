@@ -17,7 +17,7 @@ class Custom_dataset(Dataset):
                 self.labels_list = f.read().splitlines()
         self.num_data = len(self.imgs_list)
 
-        self.ignore_label = 255
+        self.ignore_label = -1
 
     def __len__(self):
         return self.num_data
@@ -33,7 +33,7 @@ class Custom_dataset(Dataset):
         pass
 
     def convert_id_to_trainid(self, label): # label: HW
-        label_cvt = self.ignore_label*torch.ones_like(label)
+        label_cvt = self.ignore_label*torch.ones_like(label).long()
         for id, tid in self.id_to_trainid.items():
             label_cvt[label == id] = tid # torch에서 == 연산 overloading했음
         return label_cvt

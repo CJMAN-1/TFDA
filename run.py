@@ -5,12 +5,13 @@ import sys
 from src.utils import get_logger
 import torch, gc
 
-@hydra.main(config_path="configs", config_name="config_mtdtnet")
+@hydra.main(config_path="configs", config_name="config_adas")
 def main(config: DictConfig):
     os.chdir(config.work_dir)
+    os.environ['HYDRA_FULL_ERROR'] = '1'
     ### your code ###
-    from src.trainer.uda_mtdt_trainer import UDA_mtdt_trainer
-    trainer = UDA_mtdt_trainer(config)
+    from src.trainer.uda_adas_trainer import UDA_adas_trainer
+    trainer = UDA_adas_trainer(config)
     ### your code ###
     
     return trainer.train()
@@ -18,5 +19,3 @@ def main(config: DictConfig):
 
 if __name__ == "__main__":
     main()
-    gc.collect()
-    torch.cuda.empty_cache()

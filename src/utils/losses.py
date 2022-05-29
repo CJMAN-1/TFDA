@@ -6,9 +6,8 @@ from src.utils.matrix import *
 
 ### 모델에 상관없이 사용되는 loss function들
 class Base_losses():
-    def __init__(self, local_rank):
-        self.local_rank = local_rank
-        
+    def __init__(self):
+        pass
 
     def CrossEntropy2d(self, predict, target, class_weight=None):
         assert predict.dim() == 4
@@ -32,8 +31,8 @@ class Base_losses():
 
 ### Mtdt net에서만 사용되는 loss functions.
 class Mtdt_losses(Base_losses):
-    def __init__(self, local_rank, datasets):
-        super(Mtdt_losses, self).__init__(local_rank)
+    def __init__(self, datasets):
+        super(Mtdt_losses, self).__init__()
         self.source = datasets[0]
         self.targets = datasets[1:]
         self.n_targets = len(self.targets)
@@ -86,7 +85,7 @@ class Mtdt_losses(Base_losses):
 
     def Consis(self, source_img, cvt_imgs):
         if self.vgg19 == None:
-            self.vgg19 = VGG19().to(self.local_rank)
+            self.vgg19 = VGG19().cuda()
 
         loss = 0
         features = dict()
@@ -101,7 +100,7 @@ class Mtdt_losses(Base_losses):
 
     def Style(self, target_imgs, cvt_imgs):
         if self.vgg19 == None:
-            self.vgg19 = VGG19().to(self.local_rank)
+            self.vgg19 = VGG19().cuda()
 
         loss = 0
         features = dict()

@@ -4,6 +4,7 @@ defaults:
   - logger: Tensorboard.yaml
   - seg_model: Segformer.yaml
   - i2i_model: Mtdtnet.yaml
+  - label_filtering: BARS.yaml
   - source_dataset: GTA5.yaml         # have to modify with source_data below
   - target_dataset: Cityscapes.yaml   # have to modify with target_data below
   - data_loader: default.yaml
@@ -19,8 +20,9 @@ ex: "test"
 description: "test"
 
 # training
-seg_pretrained: "pretrained/segformer/segformer_mitb5_46.92.pth"
+seg_pretrained: "pretrained/segformer/segformer_mitb5_46.92_single.pth"
 i2i_pretrained: null
+bars_start_iter: 300
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 10 

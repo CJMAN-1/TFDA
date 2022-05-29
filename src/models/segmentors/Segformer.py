@@ -39,15 +39,32 @@ class Segformer(nn.Module):
             self.decode_head.init_weights(pretrained=pre_decode_head)
 
     def _forward_train(self, img):
+        self.backbone.train()
+        self.decode_head.train()
         output = self.backbone(img)
         output = self.decode_head(output)
         return output
     
     def _forward_infer(self, img):
-        pass
+        self.backbone.eval()
+        self.decode_head.eval()
+        with torch.no_grad():
+            output = self.backbone(img)
+            output = self.decode_head(output)
+        return output
+    
+    def _forward_feat(self, img):
+        self.backbone.eval()
+        self.decode_head.eval()
+        with torch.no_grad():
+            output = self.backbone(img)
+            output, feat = self.decode_head(output, return_feat=True)
+        return output, feat
 
     def forward(self, img, mode=None):
         if mode == 'train' or mode is None:
             return self._forward_train(img)
         elif mode == 'infer':
             return self._forward_infer(img)
+        elif mode == 'feat':
+            return self._forward_feat(img)

@@ -1,3 +1,4 @@
+from codecs import ignore_errors
 from .Custom_dataset import *
 from torchvision.transforms.functional import InterpolationMode
 

@@ -54,14 +54,16 @@ class SegFormerHead(nn.Module):
                                     kernel_size=1)
         if norm == 'SyncBN':
             self.norm = nn.SyncBatchNorm(num_features=embedding_dim)
-        
+        elif norm == 'BN':
+            self.norm = nn.BatchNorm2d(num_features=embedding_dim)
+            
         if dropout_ratio > 0:
             self.dropout = nn.Dropout2d(dropout_ratio)
         else:
             self.dropout = None
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
 
-    def forward(self, inputs):
+    def forward(self, inputs, return_feat=False):
         x = self._transform_inputs(inputs)  # len=4, 1/4,1/8,1/16,1/32
         c1, c2, c3, c4 = x
 
@@ -79,13 +81,17 @@ class SegFormerHead(nn.Module):
 
         _c1 = self.linear_c1(c1).permute(0,2,1).reshape(n, -1, c1.shape[2], c1.shape[3]).contiguous()
 
-        _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
+        _c_cat = torch.cat([_c4, _c3, _c2, _c1], dim=1)
+
+        _c = self.linear_fuse(_c_cat)
         _c = self.norm(_c)
 
         x = self.dropout(_c)
         x = self.linear_pred(x)
-
-        return x
+        if return_feat:
+            return x, _c_cat
+        else:
+            return x
 
     def _transform_inputs(self, inputs):
         """Transform inputs for decoder.

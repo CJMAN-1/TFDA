@@ -5,11 +5,8 @@ from typing import Tuple, Any
 import hydra
 import torch
 import torch.nn.functional as F
-import torch.distributed as dist
 from omegaconf import DictConfig
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from src import utils
 from src.utils.losses import *
@@ -37,7 +34,7 @@ class Seg_trainer(Base_trainer):
         if config.get("seg_pretrained") and os.path.isfile(config.seg_pretrained):
             self.LOG.info("Load a trained model.")
             self.model, self.criterion, self.optimizer = self.load_model(
-                config.seg_pretrained, config.seg_model, self.local_rank)
+                config.seg_pretrained, config.seg_model)
         else:
             self.LOG.info("There is no trained segmentor model, Initialize a new model.")
             self.model, self.criterion, self.optimizer = self.init_model(config.seg_model)
@@ -52,15 +49,11 @@ class Seg_trainer(Base_trainer):
             self.loader[k] = iter(v)
 
         ### Initialize a tensorboard (only zero rank)
-        self.writer = hydra.utils.instantiate(config.logger) if self.local_rank == 0 else None # log는 local rank가 0인 애로만 작성. 이래도 아무 상관 없나?
+        self.writer = hydra.utils.instantiate(config.logger) # log는 local rank가 0인 애로만 작성. 이래도 아무 상관 없나?
         self.valid_class = self.origin_loader['T_v'].dataset.validclass_name
 
         ### Initialize etc variables
         self.best_miou = 0
-        # if self.local_rank == 0: => 이거 했는데 다 똑같은 색깔로만 나옴.. 개열받음
-        #     iou_class = ['iou/'+name for name in self.valid_class]
-        #     layout = {'Common values': {'iou':['Multiline', iou_class]}}
-        #     self.writer.add_custom_scalars(layout)
 
 
     def __del__(self):
@@ -70,8 +63,7 @@ class Seg_trainer(Base_trainer):
             self.writer.close()
 
 
-    def train(self) -> None: # self.local_rank : 한개의 머신(gpu가 달린 컴퓨터) 안에 있는 process의 인덱스, global_rank도 있는데 그건 머신이 여러개 있을 경우에 의미가 있음.   
-        dist.barrier()
+    def train(self) -> None:
         self.LOG.info("All ranks are ready to train.")
         for iteration in tqdm(range(0, self.config.max_iteration), desc=self.config.ex+'| Training'):
             self.model.train()
@@ -88,13 +80,13 @@ class Seg_trainer(Base_trainer):
             self.optimizer.step()
             
             ### Tensorboard
-            if iteration % self.config.tensor_interval == 0 and self.local_rank == 0:
+            if iteration % self.config.tensor_interval == 0:
                 output = F.log_softmax(output, dim = 1)
                 prediction = torch.argmax(output, dim = 1)
                 self.plot_tensor_img(prediction, batch, iteration)
 
             ### Evaluation
-            if iteration % self.config.eval_interval == 0 and self.local_rank == 0:
+            if iteration % self.config.eval_interval == 0:
                 self.LOG.info(f"iteration: {iteration}")
                 miou, iou = self.eval(self.config, self.model, self.origin_loader['T_v'])
                 self.log_performance(iou, self.valid_class)
@@ -123,18 +115,18 @@ class Seg_trainer(Base_trainer):
                 data['img'], data['label'] = next(loader[type])
                 batch[type] = data.copy()
 
-            batch[type]['img'] = batch[type]['img'].to(self.local_rank)
-            batch[type]['label'] = batch[type]['label'].to(self.local_rank)
+            batch[type]['img'] = batch[type]['img'].cuda()
+            batch[type]['label'] = batch[type]['label'].cuda()
 
         return batch
 
 
     def load_model(self, checkpoint_file: str, config: DictConfig) -> Tuple[Any, Any, Any]:
         # model
-        model, criterion, optimizer = self.init_model(config, self.local_rank)
+        model, criterion, optimizer = self.init_model(config)
 
         model.load_state_dict(
-            torch.load(checkpoint_file, map_location=f"cuda:{self.local_rank}")
+            torch.load(checkpoint_file)
         )
 
         return model, criterion, optimizer
@@ -142,8 +134,7 @@ class Seg_trainer(Base_trainer):
 
     def init_model(self, config) -> Tuple[Any, Any, Any]:
         # model
-        model = hydra.utils.instantiate(config.architecture).to(self.local_rank)
-        model = DDP(model, device_ids=[self.local_rank], find_unused_parameters=False)
+        model = hydra.utils.instantiate(config.architecture).cuda()
 
         # criterion
         loss_set = Base_losses()
@@ -165,13 +156,9 @@ class Seg_trainer(Base_trainer):
         tar_train_dataset = hydra.utils.instantiate(config.target_dataset.train)
         tar_val_dataset =   hydra.utils.instantiate(config.target_dataset.val)
         
-        src_train_sampler = DistributedSampler(src_train_dataset, shuffle=True, drop_last=True)
-        tar_train_sampler = DistributedSampler(tar_train_dataset, shuffle=True, drop_last=True)
-        tar_val_sampler =   DistributedSampler(tar_val_dataset)
 
         src_train_dataloader = DataLoader(
                                             src_train_dataset,
-                                            sampler=src_train_sampler,
                                             batch_size=config.data_loader.train.batch_size,
                                             pin_memory=config.data_loader.train.pin_memory,
                                             persistent_workers=config.data_loader.train.persistent_workers, # 한바퀴 돌고나서 메모리에서 안지우고 다시 쓰겠다.
@@ -182,7 +169,6 @@ class Seg_trainer(Base_trainer):
 
         tar_train_dataloader = DataLoader(
                                             tar_train_dataset,
-                                            sampler=tar_train_sampler,
                                             batch_size=config.data_loader.train.batch_size,
                                             pin_memory=config.data_loader.train.pin_memory,
                                             persistent_workers=config.data_loader.train.persistent_workers,
@@ -192,7 +178,6 @@ class Seg_trainer(Base_trainer):
         )
         tar_val_dataloader = DataLoader(
                                             tar_val_dataset,
-                                            sampler=tar_val_sampler,
                                             batch_size=config.data_loader.val.batch_size,
                                             persistent_workers=config.data_loader.train.persistent_workers,
                                             num_workers=config.data_loader.train.num_workers,

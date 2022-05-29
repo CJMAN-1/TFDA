@@ -1,20 +1,23 @@
 import torch.nn as nn
 import functools
 from torch.nn.utils import spectral_norm
-import torchvision
 import torch.nn.functional as F
 import torch
-import logging
 from src.utils.losses import *
 from src.utils import get_logger
 import os
+from itertools import chain
+from src.utils.optimizers import get_optimizer
+
 
 class Mtdtnet(nn.Module):
     def __init__(self,
                 architecture,
                 loss,
+                generator_optimizer,
+                discriminator_optimizer,
                 datasets,  # 0: source 1~: targets
-                pretrained_mtdtnet=None):
+                pretrained_mtdtnet):
         super(Mtdtnet, self).__init__()
         self.encoder = architecture.encoder
         self.generator = architecture.generator
@@ -29,19 +32,28 @@ class Mtdtnet(nn.Module):
 
         self.init_weights(pretrained_mtdtnet)
 
-
         ### logger
         self.LOG = get_logger(__name__)
 
-
         ### criterion
-        self.local_rank = int(os.environ["LOCAL_RANK"])
-        self.loss_set = Mtdt_losses(self.local_rank, self.datasets)
+        self.loss_set = Mtdt_losses(self.datasets)
         self.loss_weights = {}
 
         self.LOG.info(f'losses of I2I model: {loss.type}')
         for name, w in zip(loss.type, loss.weight):
             self.loss_weights[name] = w
+
+        ### optimizer
+        param_g = self.encoder.parameters()
+        param_g = chain(param_g, self.generator.parameters())
+        param_g = chain(param_g, self.st_encoder.parameters())
+        param_g = chain(param_g, self.label_embed.parameters())
+        param_g = chain(param_g, self.domain_transfer.parameters())
+
+        pram_d = self.discrminator.parameters()
+        self.optimizers = {}
+        self.optimizers['G'] = get_optimizer(generator_optimizer, param_g)
+        self.optimizers['D'] = get_optimizer(discriminator_optimizer, pram_d)
         
     
     def init_weights(self, pretrained=None):
@@ -53,10 +65,19 @@ class Mtdtnet(nn.Module):
     def _forward_train(self, imgs, labels, return_imgs=True):
         ### train generator
         loss_g, d_recons, id_recon, cvt_imgs = self._train_gen(imgs, labels)
+        
+        loss_g.backward()
+        self.optimizers['G'].step()
+        self.optimizers['G'].zero_grad()
 
         ### train discriminator
         loss_d = self._train_dis(imgs, labels)
-        
+
+        loss_d.backward()
+        self.optimizers['D'].step()
+        self.optimizers['D'].zero_grad()
+
+        ### return        
         if return_imgs:
             for k, img in d_recons.items():
                 d_recons[k] = img.detach()

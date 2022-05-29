@@ -12,7 +12,7 @@ architecture:
     feature_strides: [4,8,16,32]
     dropout_ratio: 0.1
     num_classes: ${class_num}
-    norm: SyncBN
+    norm: BN
     align_corners: False
     decoder_params:
       embed_dim: 256
