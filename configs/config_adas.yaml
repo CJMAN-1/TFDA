@@ -24,6 +24,7 @@ seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
 i2i_pretrained: null
 bars_start_iter: 600
 seg_start_iter: 1 # in training code
+pl_start_iter: 1 
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 10

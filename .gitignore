@@ -200,3 +200,4 @@ datasets
 logs/*
 activate
 pretrained
+do not delete

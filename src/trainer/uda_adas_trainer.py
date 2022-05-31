@@ -79,14 +79,9 @@ class UDA_adas_trainer(Base_trainer):
         self.valid_class = self.origin_loader['T_v'].dataset.validclass_name
 
 
-    def __del__(self):
-        if hasattr(self, 'writer') and (self.writer is not None):
-            self.writer.close()
-
-
     def train(self) -> None:  
         self.LOG.info("All ranks are ready to train.")
-        if 1 :
+        if 0 :
             self.LOG.info("source only performance.")
             _, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
             self.log_performance(iou, self.valid_class)
@@ -106,23 +101,23 @@ class UDA_adas_trainer(Base_trainer):
 
             ### label filtering - make pseudo labeland features
             
-            filtered_label = {}
-            if self.config.bars_start_iter <= iteration:
+            
+            #if self.config.bars_start_iter <= iteration:
+            if 0:
+                filtered_label = {}
                 with torch.no_grad():
+                    ### forward model
                     self.seg_model.eval()
-                    output, feat_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
-                    # output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                    # feat_s2t = F.interpolate(feat_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    _, feat_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
+                    output, feat_t = self.seg_model(batch['T_t']['img'], mode='feat')
+                    
+                    ### make pseudo label
                     pd_label = torch.argmax(output, dim=1).unsqueeze(1).float()
-
                     pd_label = F.interpolate(pd_label, batch['S_t']['label'].size()[1:], mode='nearest')
                     pd_label = pd_label.squeeze(1).long()
 
-                    _, feat_t = self.seg_model(batch['T_t']['img'], mode='feat')
-                    # feat_t = F.interpolate(feat_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-
                     ### label filtering - compute filtered label
-                    if iteration == self.config.bars_start_iter:
+                    if iteration == self.config.bars_start_iter: # 처음엔 label 그대로 사용해서 업데이트
                         self.label_filter.update(feat_s2t, batch['S_t']['label'], f'{self.source}2{self.target}')
                         self.label_filter.update(feat_t, pd_label, self.target)
                         
@@ -134,29 +129,42 @@ class UDA_adas_trainer(Base_trainer):
                     filtered_t_label[mask_t != filtered_t_label] = self.origin_loader['S_t'].dataset.ignore_label
                     filtered_label[f'{self.target}'] = filtered_t_label
 
-                    if iteration != self.config.bars_start_iter:
+                    if iteration != self.config.bars_start_iter: # 다음부턴 filtering된 label을 사용해서 업데이트
                         self.label_filter.update(feat_s2t, filtered_s2t_label, f'{self.source}2{self.target}')
                         self.label_filter.update(feat_t, filtered_t_label, self.target)
 
+            ### make pseudo label
+            with torch.no_grad():
+                self.seg_model.eval()
+                output = self.seg_model(batch['T_t']['img'], mode='infer')
+                pd_label = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear')
+                pd_label = torch.argmax(pd_label, dim=1)
+                pd_label = pd_label.long()
                 
             ### seg - Compute output
             if self.config.seg_start_iter <= iteration:
                 self.seg_model.train()
                 if self.config.bars_start_iter <= iteration:
-                    output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
-                    #output = self.seg_model(batch['S_t']['img'])
-                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                    loss_seg_s2t = self.seg_loss_set.CrossEntropy2d(output, filtered_s2t_label)
+                    output_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
+                    output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg_s2t = self.seg_loss_set.CrossEntropy2d(output_s2t, filtered_s2t_label)
 
-                    output = self.seg_model(batch['T_t']['img'])
-                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                    loss_seg_t = self.seg_loss_set.CrossEntropy2d(output, filtered_t_label)
+                    output_t = self.seg_model(batch['T_t']['img'])
+                    output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg_t = self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label)
 
                     loss_seg = loss_seg_s2t + loss_seg_t
                 else :
-                    output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
-                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                    loss_seg = self.seg_loss_set.CrossEntropy2d(output, batch['S_t']['label'])
+                    ### learning cvt imgs
+                    output_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
+                    output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label'])
+
+                    ### learning target imgs with pseudo labels
+                    if self.config.pl_start_iter <= iteration:
+                        output_t = self.seg_model(batch['T_t']['img'])
+                        output_t = F.interpolate(output_t, pd_label.size()[1:], mode='bilinear', align_corners=False)
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label)
 
                 ### seg - Compute gradient & optimizer step
                 self.seg_model.zero_grad()
@@ -165,18 +173,19 @@ class UDA_adas_trainer(Base_trainer):
 
             ### Tensorboard
             if iteration % self.config.tensor_interval == 0:
+                filtered_label = None
                 if self.config.seg_start_iter <= iteration:
-                    output = F.log_softmax(output, dim = 1)
-                    prediction = torch.argmax(output, dim = 1)
-                    self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration)
+                    output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    prediction_s2t = torch.argmax(output_s2t, dim = 1)
+                    self.plot_tensor_img(prediction_s2t, batch, d_recons, id_recon, cvt_imgs, filtered_label, pd_label, iteration)
 
                     loss_sum = dict()
                     loss_sum['D'] = loss_d
                     loss_sum['G'] = loss_g
                     loss_sum['Seg'] = loss_seg
                 else:
-                    prediction, filtered_label = None, None
-                    self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration)
+                    prediction_s2t, filtered_label = None, None
+                    self.plot_tensor_img(prediction_s2t, batch, d_recons, id_recon, cvt_imgs, filtered_label, pd_label, iteration)
 
                     loss_sum = dict()
                     loss_sum['D'] = loss_d
@@ -198,8 +207,8 @@ class UDA_adas_trainer(Base_trainer):
                 gc.collect()
                 torch.cuda.empty_cache()
 
-            gc.collect()
-            torch.cuda.empty_cache()
+            # gc.collect()
+            # torch.cuda.empty_cache()
 
         self.LOG.info("Finish training.")
 
@@ -343,21 +352,29 @@ class UDA_adas_trainer(Base_trainer):
             self.LOG.info('\n'+table.get_string())
         
         
-    def plot_tensor_img(self, prediction=None, batch=None, d_recons=None, id_recon=None, cvt_imgs=None, filtered_label=None, iteration=0):
+    def plot_tensor_img(self, prediction_s2t=None, batch=None, d_recons=None, id_recon=None, cvt_imgs=None, filtered_label=None, pd_label=None, iteration=0):
         with torch.no_grad():
             ### input
             if batch is not None:
+                ### source input
                 img_grid = torchvision.utils.make_grid(batch['S_t']['img'], normalize=True, value_range=(-1,1))
-                self.writer.add_image('input/img', img_grid, iteration)
+                self.writer.add_image('input/source_img', img_grid, iteration)
                 lbl = self.origin_loader['S_t'].dataset.colorize_label(batch['S_t']['label'])
                 img_grid = torchvision.utils.make_grid(lbl, normalize=True, value_range=(0,255))
-                self.writer.add_image('input/GT', img_grid, iteration)
+                self.writer.add_image('input/source_GT', img_grid, iteration)
+                
+                ### target input
+                img_grid = torchvision.utils.make_grid(batch['T_t']['img'], normalize=True, value_range=(-1,1))
+                self.writer.add_image('input/target_img', img_grid, iteration)
+                lbl = self.origin_loader['S_t'].dataset.colorize_label(batch['T_t']['label'])
+                img_grid = torchvision.utils.make_grid(lbl, normalize=True, value_range=(0,255))
+                self.writer.add_image('input/target_GT', img_grid, iteration)
 
             ### output
-            if prediction is not None:
-                prediction = self.origin_loader['S_t'].dataset.colorize_label(prediction)
-                img_grid = torchvision.utils.make_grid(prediction, normalize=True, value_range=(0,255))
-                self.writer.add_image('output/prediction', img_grid, iteration)
+            if prediction_s2t is not None:
+                prediction_s2t = self.origin_loader['S_t'].dataset.colorize_label(prediction_s2t)
+                img_grid = torchvision.utils.make_grid(prediction_s2t, normalize=True, value_range=(0,255))
+                self.writer.add_image('output/prediction_s2t', img_grid, iteration)
 
             ### direct recon
             if d_recons is not None:
@@ -382,6 +399,12 @@ class UDA_adas_trainer(Base_trainer):
                     img = self.origin_loader['S_t'].dataset.colorize_label(img)
                     img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(0,255))
                     self.writer.add_image(f'filtered_label/{name}', img_grid, iteration)
+
+            ### pseudo label
+            if pd_label is not None:
+                pd_label = self.origin_loader['S_t'].dataset.colorize_label(pd_label)
+                img_grid = torchvision.utils.make_grid(pd_label, normalize=True, value_range=(0,255))
+                self.writer.add_image(f'pseudo_label/{self.target}', img_grid, iteration)
 
             ### waiting, 이미지가 저장되는데 시간이 어느정도 필요함.
             sleep(0.5)
