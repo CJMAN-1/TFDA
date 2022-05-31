@@ -54,6 +54,8 @@ class Mtdtnet(nn.Module):
         self.optimizers = {}
         self.optimizers['G'] = get_optimizer(generator_optimizer, param_g)
         self.optimizers['D'] = get_optimizer(discriminator_optimizer, pram_d)
+
+        self.is_first_step = True
         
     
     def init_weights(self, pretrained=None):
@@ -63,19 +65,37 @@ class Mtdtnet(nn.Module):
             self.load_state_dict(torch.load(pretrained))
 
     def _forward_train(self, imgs, labels, return_imgs=True):
-        ### train generator
-        loss_g, d_recons, id_recon, cvt_imgs = self._train_gen(imgs, labels)
-        
-        loss_g.backward()
-        self.optimizers['G'].step()
-        self.optimizers['G'].zero_grad()
+        if self.is_first_step:
+            self.is_first_step = False
+            ### train generator
+            loss_g, loss_dict_g, d_recons, id_recon, cvt_imgs = self._train_gen(imgs, labels)
+            
+            loss_g.backward()
+            self.optimizers['G'].step()
+            self.optimizers['G'].zero_grad()
 
-        ### train discriminator
-        loss_d = self._train_dis(imgs, labels)
+            ### train discriminator
+            loss_d, loss_dict_d = self._train_dis(imgs, labels)
 
-        loss_d.backward()
-        self.optimizers['D'].step()
-        self.optimizers['D'].zero_grad()
+            loss_d.backward()
+            self.optimizers['D'].step()
+            self.optimizers['D'].zero_grad()
+        else:
+            ### train discriminator
+            loss_d, loss_dict_d = self._train_dis(imgs, labels)
+
+            loss_d.backward()
+            self.optimizers['D'].step()
+            self.optimizers['D'].zero_grad()
+
+            ### train generator
+            loss_g, loss_dict_g, d_recons, id_recon, cvt_imgs = self._train_gen(imgs, labels)
+            
+            loss_g.backward()
+            self.optimizers['G'].step()
+            self.optimizers['G'].zero_grad()
+
+        loss_dict = dict(loss_dict_g, **loss_dict_d)
 
         ### return        
         if return_imgs:
@@ -85,9 +105,9 @@ class Mtdtnet(nn.Module):
                 id_recon[k] = img.detach()
             for k, img in cvt_imgs.items():
                 cvt_imgs[k] = img.detach()
-            return loss_d, loss_g, d_recons, id_recon, cvt_imgs
+            return loss_d, loss_g, loss_dict, d_recons, id_recon, cvt_imgs
         else:
-            return loss_d, loss_g
+            return loss_d, loss_g, loss_dict,
 
         
     def _forward_infer(self, imgs, labels):
@@ -144,7 +164,7 @@ class Mtdtnet(nn.Module):
         loss['Gan_d'] = self.loss_set.Gan_d(D_outputs_real, D_outputs_fake, self.targets)
         loss_dis = loss['Gan_d'] * self.loss_weights['Gan_d']
 
-        return loss_dis
+        return loss_dis, loss
 
 
     def _train_gen(self, imgs, labels):
@@ -202,7 +222,7 @@ class Mtdtnet(nn.Module):
             if k not in ['Gan_d']:
                 loss_gen += v * self.loss_weights[k]
             
-        return loss_gen, d_recons, id_recon, cvt_imgs
+        return loss_gen, loss, d_recons, id_recon, cvt_imgs
 
 
     def _slice_patches(self, imgs, hight_slice=2, width_slice=4):
@@ -220,12 +240,13 @@ class Encoder(nn.Module):
         bin = functools.partial(nn.GroupNorm, 4)
         # bin = functools.partial(Normlayer, affine=True)
         self.Encoder_Conv = nn.Sequential(
-            nn.Conv2d(channels, 32, kernel_size=4, stride=2, padding=1, bias=True),
+            nn.Conv2d(channels, 32, kernel_size=4, stride=2, padding=1, bias=False),
             bin(32),
             nn.ReLU(True),
             ResidualBlock(32, 32),
             ResidualBlock(32, 32),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1, bias=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            bin(64),
             nn.ReLU(True),
         )
 
@@ -238,13 +259,15 @@ class Encoder(nn.Module):
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
+        bin = functools.partial(nn.GroupNorm, 4)
         self.Decoder_Conv = nn.Sequential(
             spectral_norm(nn.ConvTranspose2d(64, 32, kernel_size=3, stride=1, padding=1, bias=True)),
+            bin(32),
             nn.ReLU(True),
             ResidualBlock(32, 32),
             ResidualBlock(32, 32),
             # batch_size x 3 x 1280 x 768
-            spectral_norm(nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1, bias=True)),
+            spectral_norm(nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1, bias=True)),            
             nn.Tanh()
         )
     def forward(self, x):
@@ -257,7 +280,8 @@ class Style_Encoder(nn.Module):
         bin = functools.partial(nn.GroupNorm, 4)
         # bin = functools.partial(Normlayer, affine=True)
         self.Encoder_Conv = nn.Sequential(
-            nn.Conv2d(channels, 32, kernel_size=4, stride=2, padding=1, bias=True),
+            nn.Conv2d(channels, 32, kernel_size=4, stride=2, padding=1, bias=False),
+            bin(32),
             nn.ReLU(True),
             ResidualBlock(32, 32),
             ResidualBlock(32, 32),
@@ -287,9 +311,10 @@ class Multi_Head_Discriminator(nn.Module):
             # input size: 256x256
             spectral_norm(nn.Conv2d(channels, 64, kernel_size=4, stride=2, padding=1, bias=True)),  # 
             # nn.InstanceNorm2d(64),
-            # nn.GroupNorm(4, 64),
+            nn.GroupNorm(4, 64),
             nn.LeakyReLU(negative_slope=0.2),
             spectral_norm(nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=True)),  # 
+            nn.GroupNorm(4, 128),
             # nn.InstanceNorm2d(128),
             nn.LeakyReLU(negative_slope=0.2),
         )
@@ -297,27 +322,28 @@ class Multi_Head_Discriminator(nn.Module):
         self.Patch = nn.Sequential(
             spectral_norm(nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1, bias=True)),  # 
             # nn.InstanceNorm2d(256),
-            # nn.GroupNorm(4, 256),
+            nn.GroupNorm(4, 256),
             nn.LeakyReLU(negative_slope=0.2),
             spectral_norm(nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1, bias=True)), # 
             # nn.InstanceNorm2d(512),
-            # nn.GroupNorm(4, 512),
+            nn.GroupNorm(4, 512),
             nn.LeakyReLU(negative_slope=0.2),
             spectral_norm(nn.Conv2d(512, 1, kernel_size=3, stride=1, padding=1, bias=True)),
         )
 
-        self.fc = nn.Sequential(
-            spectral_norm(nn.Linear(64*64*128, 500)),
-            nn.ReLU(),
-            spectral_norm(nn.Linear(500, num_domains))
-        )
+        # self.fc = nn.Sequential(
+        #     spectral_norm(nn.Linear(64*64*128, 500)),
+        #     nn.ReLU(),
+        #     spectral_norm(nn.Linear(500, num_domains))
+        # )
 
     def forward(self, inputs):
         conv_output = self.Conv(inputs)
         patch_output = self.Patch(conv_output)
-        fc_output = self.fc(conv_output.view(conv_output.size(0), -1))
+        # fc_output = self.fc(conv_output.view(conv_output.size(0), -1))
         # fc_output = self.fc(conv_output).view(conv_output.size(0), -1)
-        return (patch_output, fc_output)
+        # return (patch_output, fc_output)
+        return patch_output
 
 
 class Domain_Transfer(nn.Module):

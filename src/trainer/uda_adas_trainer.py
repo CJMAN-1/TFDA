@@ -32,6 +32,8 @@ class UDA_adas_trainer(Base_trainer):
         self.datasets = [self.config.source_data, self.config.target_data]
         self.source = self.config.source_data
         self.target = self.config.target_data
+        if self.config.seg_start_iter is None:
+            self.config.seg_start_iter = self.config.bars_start_iter + 30
 
         ### Logger
         self.LOG = utils.get_logger(__name__)
@@ -72,6 +74,8 @@ class UDA_adas_trainer(Base_trainer):
 
         ### Initialize a tensorboard
         self.writer = hydra.utils.instantiate(config.logger)
+        self.writer.add_text("description", self.config.description, 0)
+
         self.valid_class = self.origin_loader['T_v'].dataset.validclass_name
 
 
@@ -82,13 +86,11 @@ class UDA_adas_trainer(Base_trainer):
 
     def train(self) -> None:  
         self.LOG.info("All ranks are ready to train.")
-        if 0 :
+        if 1 :
             self.LOG.info("source only performance.")
             _, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
             self.log_performance(iou, self.valid_class)
             self.plot_tensor_perform(iou, self.valid_class, 0)
-            gc.collect()
-            torch.cuda.empty_cache()
 
         for iteration in tqdm(range(1, self.config.max_iteration), desc=self.config.ex+'| Training'):
             self.seg_model.train()
@@ -100,70 +102,86 @@ class UDA_adas_trainer(Base_trainer):
             imgs[self.source], labels[self.source] = batch['S_t']['img'], batch['S_t']['label']
             imgs[self.target], labels[self.target] = batch['T_t']['img'], batch['T_t']['label']
 
-            loss_d, loss_g, d_recons, id_recon, cvt_imgs = self.i2i_model(imgs, labels, mode='train', return_imgs=True)
+            loss_d, loss_g, loss_dict, d_recons, id_recon, cvt_imgs = self.i2i_model(imgs, labels, mode='train', return_imgs=True)
 
             ### label filtering - make pseudo labeland features
-            filtered_label = {}
-            with torch.no_grad():
-                self.seg_model.eval()
-                output, feat_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
-                # output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                # feat_s2t = F.interpolate(feat_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                pd_label = torch.argmax(output, dim=1).unsqueeze(1).float()
-
-                pd_label = F.interpolate(pd_label, batch['S_t']['label'].size()[1:], mode='nearest')
-                pd_label = pd_label.squeeze(1).long()
-
-                _, feat_t = self.seg_model(batch['T_t']['img'], mode='feat')
-                # feat_t = F.interpolate(feat_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-
-                ### label filtering - compute filtered label
-                if iteration == 1:
-                    self.label_filter.update(feat_s2t, batch['S_t']['label'], f'{self.source}2{self.target}')
-                    self.label_filter.update(feat_t, pd_label, self.target)
-                    
-                mask_s2t, mask_t = self.label_filter(feat_s2t, feat_t, pd_label, batch['S_t']['label'], f'{self.source}2{self.target}')
-                filtered_s2t_label = copy.deepcopy(batch['S_t']['label'].detach())
-                filtered_s2t_label[mask_s2t != filtered_s2t_label] = self.origin_loader['S_t'].dataset.ignore_label
-                filtered_label[f'{self.source}2{self.target}'] = filtered_s2t_label
-                filtered_t_label = pd_label.detach()
-                filtered_t_label[mask_t != filtered_t_label] = self.origin_loader['S_t'].dataset.ignore_label
-                filtered_label[f'{self.target}'] = filtered_t_label
-
-                if iteration != 1:
-                    self.label_filter.update(feat_s2t, filtered_s2t_label, f'{self.source}2{self.target}')
-                    self.label_filter.update(feat_t, filtered_t_label, self.target)
-
             
+            filtered_label = {}
+            if self.config.bars_start_iter <= iteration:
+                with torch.no_grad():
+                    self.seg_model.eval()
+                    output, feat_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
+                    # output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    # feat_s2t = F.interpolate(feat_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    pd_label = torch.argmax(output, dim=1).unsqueeze(1).float()
+
+                    pd_label = F.interpolate(pd_label, batch['S_t']['label'].size()[1:], mode='nearest')
+                    pd_label = pd_label.squeeze(1).long()
+
+                    _, feat_t = self.seg_model(batch['T_t']['img'], mode='feat')
+                    # feat_t = F.interpolate(feat_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+
+                    ### label filtering - compute filtered label
+                    if iteration == self.config.bars_start_iter:
+                        self.label_filter.update(feat_s2t, batch['S_t']['label'], f'{self.source}2{self.target}')
+                        self.label_filter.update(feat_t, pd_label, self.target)
+                        
+                    mask_s2t, mask_t = self.label_filter(feat_s2t, feat_t, pd_label, batch['S_t']['label'], f'{self.source}2{self.target}')
+                    filtered_s2t_label = copy.deepcopy(batch['S_t']['label'].detach())
+                    filtered_s2t_label[mask_s2t != filtered_s2t_label] = self.origin_loader['S_t'].dataset.ignore_label
+                    filtered_label[f'{self.source}2{self.target}'] = filtered_s2t_label
+                    filtered_t_label = pd_label.detach()
+                    filtered_t_label[mask_t != filtered_t_label] = self.origin_loader['S_t'].dataset.ignore_label
+                    filtered_label[f'{self.target}'] = filtered_t_label
+
+                    if iteration != self.config.bars_start_iter:
+                        self.label_filter.update(feat_s2t, filtered_s2t_label, f'{self.source}2{self.target}')
+                        self.label_filter.update(feat_t, filtered_t_label, self.target)
+
+                
             ### seg - Compute output
-            self.seg_model.train()
-            output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
-            #output = self.seg_model(batch['S_t']['img'])
-            output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-            loss_seg_s2t = self.seg_loss_set.CrossEntropy2d(output, filtered_s2t_label)
+            if self.config.seg_start_iter <= iteration:
+                self.seg_model.train()
+                if self.config.bars_start_iter <= iteration:
+                    output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
+                    #output = self.seg_model(batch['S_t']['img'])
+                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg_s2t = self.seg_loss_set.CrossEntropy2d(output, filtered_s2t_label)
 
-            output = self.seg_model(batch['T_t']['img'])
-            output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-            loss_seg_t = self.seg_loss_set.CrossEntropy2d(output, filtered_t_label)
+                    output = self.seg_model(batch['T_t']['img'])
+                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg_t = self.seg_loss_set.CrossEntropy2d(output, filtered_t_label)
 
-            loss_seg = loss_seg_s2t + loss_seg_t
+                    loss_seg = loss_seg_s2t + loss_seg_t
+                else :
+                    output = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
+                    output = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                    loss_seg = self.seg_loss_set.CrossEntropy2d(output, batch['S_t']['label'])
 
-            ### seg - Compute gradient & optimizer step
-            self.seg_model.zero_grad()
-            loss_seg.backward()
-            self.seg_optimizer.step()
+                ### seg - Compute gradient & optimizer step
+                self.seg_model.zero_grad()
+                loss_seg.backward()
+                self.seg_optimizer.step()
 
             ### Tensorboard
             if iteration % self.config.tensor_interval == 0:
-                output = F.log_softmax(output, dim = 1)
-                prediction = torch.argmax(output, dim = 1)
-                self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration)
+                if self.config.seg_start_iter <= iteration:
+                    output = F.log_softmax(output, dim = 1)
+                    prediction = torch.argmax(output, dim = 1)
+                    self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration)
 
-                loss = dict()
-                loss['D'] = loss_d
-                loss['G'] = loss_g
-                loss['Seg'] = loss_seg
-                self.plot_tensor_loss(loss, iteration)
+                    loss_sum = dict()
+                    loss_sum['D'] = loss_d
+                    loss_sum['G'] = loss_g
+                    loss_sum['Seg'] = loss_seg
+                else:
+                    prediction, filtered_label = None, None
+                    self.plot_tensor_img(prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration)
+
+                    loss_sum = dict()
+                    loss_sum['D'] = loss_d
+                    loss_sum['G'] = loss_g
+                self.plot_tensor_loss(loss_sum, loss_dict, iteration)
 
             ### Evaluation
             if iteration % self.config.eval_interval == 0:
@@ -175,8 +193,8 @@ class UDA_adas_trainer(Base_trainer):
                 if miou > self.best_miou:
                     self.best_miou = miou
                     self.LOG.info(f'best miou : {self.best_miou:.2f} | miou : {miou:.2f}')
-                    torch.save(self.seg_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.seg_model.module).__name__}.pth'))
-                    torch.save(self.i2i_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.i2i_model.module).__name__}.pth'))
+                    torch.save(self.seg_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.seg_model).__name__}.pth'))
+                    torch.save(self.i2i_model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.i2i_model).__name__}.pth'))
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -293,23 +311,22 @@ class UDA_adas_trainer(Base_trainer):
         conf_mat = np.zeros((config.class_num,) * 2)
         miou = np.zeros(shape=1)
         iou = np.zeros(shape=config.class_num)
-
         with torch.no_grad():
             with logging_redirect_tqdm():
                 for img, label in tqdm(dataloader):
                     # Compute output
                     img, label = img.cuda(), label.cuda()
-                    output = model(img)
+                    output = model(img, 'infer')
                     output = F.interpolate(output, label.size()[1:], mode='bilinear', align_corners=False)
                     output = F.log_softmax(output, dim = 1)
                     output = torch.argmax(output, dim = 1)
                     # miou
                     conf_mat += metric.conf_mat(label.cpu().numpy(), output.cpu().numpy(), config.class_num)
-                
-            iou = metric.iou(conf_mat)
-            miou = np.nanmean(iou)
             
-            return miou, iou
+        iou = metric.iou(conf_mat)
+        miou = np.nanmean(iou)
+        
+        return miou, iou
 
 
     def log_performance(self, iou, class_name):
@@ -326,39 +343,45 @@ class UDA_adas_trainer(Base_trainer):
             self.LOG.info('\n'+table.get_string())
         
         
-    def plot_tensor_img(self, prediction, batch, d_recons, id_recon, cvt_imgs, filtered_label, iteration):
+    def plot_tensor_img(self, prediction=None, batch=None, d_recons=None, id_recon=None, cvt_imgs=None, filtered_label=None, iteration=0):
         with torch.no_grad():
             ### input
-            img_grid = torchvision.utils.make_grid(batch['S_t']['img'], normalize=True, value_range=(-1,1))
-            self.writer.add_image('input/img', img_grid, iteration)
-            lbl = self.origin_loader['S_t'].dataset.colorize_label(batch['S_t']['label'])
-            img_grid = torchvision.utils.make_grid(lbl, normalize=True, value_range=(0,255))
-            self.writer.add_image('input/GT', img_grid, iteration)
+            if batch is not None:
+                img_grid = torchvision.utils.make_grid(batch['S_t']['img'], normalize=True, value_range=(-1,1))
+                self.writer.add_image('input/img', img_grid, iteration)
+                lbl = self.origin_loader['S_t'].dataset.colorize_label(batch['S_t']['label'])
+                img_grid = torchvision.utils.make_grid(lbl, normalize=True, value_range=(0,255))
+                self.writer.add_image('input/GT', img_grid, iteration)
 
             ### output
-            prediction = self.origin_loader['S_t'].dataset.colorize_label(prediction)
-            img_grid = torchvision.utils.make_grid(prediction, normalize=True, value_range=(-1,1))
-            self.writer.add_image('output/prediction', img_grid, iteration)
+            if prediction is not None:
+                prediction = self.origin_loader['S_t'].dataset.colorize_label(prediction)
+                img_grid = torchvision.utils.make_grid(prediction, normalize=True, value_range=(0,255))
+                self.writer.add_image('output/prediction', img_grid, iteration)
 
             ### direct recon
-            for name, img in d_recons.items():
-                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
-                self.writer.add_image(f'direct recon/{name}', img_grid, iteration)
+            if d_recons is not None:
+                for name, img in d_recons.items():
+                    img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                    self.writer.add_image(f'direct recon/{name}', img_grid, iteration)
             ### indirect recon
-            for name, img in id_recon.items():
-                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
-                self.writer.add_image(f'indirect recon/{name}', img_grid, iteration)
+            if id_recon is not None:
+                for name, img in id_recon.items():
+                    img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                    self.writer.add_image(f'indirect recon/{name}', img_grid, iteration)
 
             ### converted image
-            for name, img in cvt_imgs.items():
-                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
-                self.writer.add_image(f'converted image/{name}', img_grid, iteration)
+            if cvt_imgs is not None:
+                for name, img in cvt_imgs.items():
+                    img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(-1,1))
+                    self.writer.add_image(f'converted image/{name}', img_grid, iteration)
 
             ### filtered label
-            for name, img in filtered_label.items():
-                img = self.origin_loader['S_t'].dataset.colorize_label(img)
-                img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(0,255))
-                self.writer.add_image(f'filtered_label/{name}', img_grid, iteration)
+            if filtered_label is not None:
+                for name, img in filtered_label.items():
+                    img = self.origin_loader['S_t'].dataset.colorize_label(img)
+                    img_grid = torchvision.utils.make_grid(img, normalize=True, value_range=(0,255))
+                    self.writer.add_image(f'filtered_label/{name}', img_grid, iteration)
 
             ### waiting, 이미지가 저장되는데 시간이 어느정도 필요함.
             sleep(0.5)
@@ -369,10 +392,14 @@ class UDA_adas_trainer(Base_trainer):
             class_name = class_name
             for name, value in zip(class_name, iou):
                 self.writer.add_scalar(f'iou/{name}', value, iteration)
+            miou = np.nanmean(iou)
+            self.writer.add_scalar(f'iou/0.mIoU', miou, iteration)
 
 
-    def plot_tensor_loss(self, loss, iteration):
+    def plot_tensor_loss(self, loss_sum, loss_dict, iteration):
         with torch.no_grad():
-            for name, value in loss.items():
+            for name, value in loss_sum.items():
                 self.writer.add_scalar(f'loss/{name}', value, iteration)
-    
+
+            for name, value in loss_dict.items():
+                self.writer.add_scalar(f'loss/{name}', value, iteration)

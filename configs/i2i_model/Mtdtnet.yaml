@@ -26,7 +26,7 @@ model:
 
   loss:
     type: [Gan_g, Direct_recon, Indirect_recon, Consis, Style, Gan_d] #losses.py에 있는 함수이름 작성
-    weight: [1.0, 1.0, 0.1, 1.0, 1e3, 1.0]
+    weight: [1.0, 1.0,          0.1,            1.0,    1e3,    1.0]
     
   generator_optimizer:
     type: Adam

@@ -95,7 +95,7 @@ class Seg_trainer(Base_trainer):
                 if miou > self.best_miou:
                     self.best_miou = miou
                     self.LOG.info(f'best miou : {self.best_miou:.2f} | miou : {miou:.2f}')
-                    torch.save(self.model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.model.module).__name__}.pth'))
+                    torch.save(self.model.state_dict(), os.path.join(HydraConfig.get().run.dir, f'{type(self.model).__name__}.pth'))
 
                 gc.collect()
                 torch.cuda.empty_cache()

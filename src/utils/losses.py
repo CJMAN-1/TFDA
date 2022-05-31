@@ -49,21 +49,24 @@ class Mtdt_losses(Base_losses):
 
         for convert in fake.keys():
             _, target = convert.split('2')
-            patch_fake, domain_fake = fake[convert]
+            #patch_fake, domain_fake = fake[convert]
+            patch_fake = fake[convert]
             b = patch_fake.size(0)
             patch_gen_loss += -patch_fake.mean()
            
-             # for ddp. if a module does not contribute for loss value, error raised    
-            if len(self.targets) == 1:
-                self.alpha_gen_domain = 0
-                domain_gen_loss += torch.sum(domain_fake)
-            elif target == self.targets[0]:
-                domain_gen_loss += self.loss_fns['CE'](domain_fake, torch.zeros(b, device=patch_fake.device).long())
-            elif target == self.targets[1]:
-                domain_gen_loss += self.loss_fns['CE'](domain_fake, torch.ones(b, device=patch_fake.device).long())
-            else:
-                domain_gen_loss += self.loss_fns['CE'](domain_fake, 2 * torch.ones(b, device=patch_fake.device).long())
-        return self.alpha_gen_patch * patch_gen_loss + self.alpha_gen_domain * domain_gen_loss
+            # for ddp. if a module does not contribute for loss value, error raised    
+            # if len(self.targets) == 1:
+            #     self.alpha_gen_domain = 0
+            #     domain_gen_loss += torch.sum(domain_fake)
+            # elif target == self.targets[0]:
+            #     domain_gen_loss += self.loss_fns['CE'](domain_fake, torch.zeros(b, device=patch_fake.device).long())
+            # elif target == self.targets[1]:
+            #     domain_gen_loss += self.loss_fns['CE'](domain_fake, torch.ones(b, device=patch_fake.device).long())
+            # else:
+            #     domain_gen_loss += self.loss_fns['CE'](domain_fake, 2 * torch.ones(b, device=patch_fake.device).long())
+        # return self.alpha_gen_patch * patch_gen_loss + self.alpha_gen_domain * domain_gen_loss
+        return self.alpha_gen_patch * patch_gen_loss
+
 
 
     def Direct_recon(self, input_imgs, recon_imgs):
@@ -123,32 +126,36 @@ class Mtdt_losses(Base_losses):
         self.alpha_dis_domain = 1. / self.n_targets
         
         for dset in real.keys():
-            patch_real, domain_real = real[dset]
+            # patch_real, domain_real = real[dset]
+            patch_real = real[dset]
             b = patch_real.size(0)
             patch_dis_loss += F.relu(1. - patch_real).mean()
            
-            if len(self.targets) == 1:
-                self.alpha_dis_domain = 0
-                domain_dis_loss += torch.sum(domain_real)
-            elif dset == targets[0]:
-                domain_dis_loss += self.loss_fns['CE'](domain_real, torch.zeros(b, device=patch_real.device).long())
-            elif dset == targets[1]:
-                domain_dis_loss += self.loss_fns['CE'](domain_real, torch.ones(b, device=patch_real.device).long())
-            else:
-                domain_dis_loss += self.loss_fns['CE'](domain_real, 2 * torch.ones(b, device=patch_real.device).long())
+            # if len(self.targets) == 1:
+            #     self.alpha_dis_domain = 0
+            #     domain_dis_loss += torch.sum(domain_real)
+            # elif dset == targets[0]:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_real, torch.zeros(b, device=patch_real.device).long())
+            # elif dset == targets[1]:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_real, torch.ones(b, device=patch_real.device).long())
+            # else:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_real, 2 * torch.ones(b, device=patch_real.device).long())
 
         for convert in fake.keys():
-            patch_fake, domain_fake = fake[convert]
+            # patch_fake, domain_fake = fake[convert]
+            patch_fake = fake[convert]
+
             patch_dis_loss += F.relu(1. + patch_fake).mean()
            
-            if len(self.targets) == 1:
-                self.alpha_dis_domain = 0
-                domain_dis_loss += torch.sum(domain_fake) 
-            elif dset == targets[0]:
-                domain_dis_loss += self.loss_fns['CE'](domain_fake, torch.zeros(b, device=patch_fake.device).long())
-            elif dset == targets[1]:
-                domain_dis_loss += self.loss_fns['CE'](domain_fake, torch.ones(b, device=patch_fake.device).long())
-            else:
-                domain_dis_loss += self.loss_fns['CE'](domain_fake, 2 * torch.ones(b, device=patch_fake.device).long())
+            # if len(self.targets) == 1:
+            #     self.alpha_dis_domain = 0
+            #     domain_dis_loss += torch.sum(domain_fake) 
+            # elif dset == targets[0]:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_fake, torch.zeros(b, device=patch_fake.device).long())
+            # elif dset == targets[1]:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_fake, torch.ones(b, device=patch_fake.device).long())
+            # else:
+            #     domain_dis_loss += self.loss_fns['CE'](domain_fake, 2 * torch.ones(b, device=patch_fake.device).long())
 
-        return self.alpha_dis_patch * patch_dis_loss + self.alpha_dis_domain * domain_dis_loss
+        # return self.alpha_dis_patch * patch_dis_loss + self.alpha_dis_domain * domain_dis_loss
+        return self.alpha_dis_patch * patch_dis_loss

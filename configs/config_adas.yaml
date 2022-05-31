@@ -20,12 +20,14 @@ ex: "test"
 description: "test"
 
 # training
-seg_pretrained: "pretrained/segformer/segformer_mitb5_46.92_single.pth"
+seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
 i2i_pretrained: null
-bars_start_iter: 300
+bars_start_iter: 600
+seg_start_iter: 1 # in training code
 max_iteration: 1000000
 eval_interval: 50
-tensor_interval: 10 
+tensor_interval: 10
+
 
 # dataset
 source_data: GTA5         # have to modify with source_dataset in defaults
@@ -35,5 +37,3 @@ class_num: 19
 
 # environment variable
 rand_seed: 3621
-master_addr: 127.0.0.1
-master_port: 29500
