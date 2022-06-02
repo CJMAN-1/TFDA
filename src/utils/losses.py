@@ -26,7 +26,10 @@ class Base_losses():
 
         loss = F.cross_entropy(predict, target, weight=class_weight, reduction='mean')
 
-        return loss
+        return loss 
+    
+    def WeightedCrossEntropy2d(self, predict, target):
+        pass
 
 
 ### Mtdt net에서만 사용되는 loss functions.

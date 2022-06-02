@@ -47,7 +47,11 @@ class BARS(nn.Module):
         if self.n_sample[domain] == 1:
             self.centroid[domain] = new_centroid
         else:
-            self.centroid[domain] += ((new_centroid - self.centroid[domain]) / self.n_sample[domain])
+            ### 바꾼코드 ema
+            alpha = 0.95
+            self.centroid[domain] = alpha*self.centroid[domain] + (1-alpha)*new_centroid
+            ### 기존코드
+            # self.centroid[domain] += ((new_centroid - self.centroid[domain]) / self.n_sample[domain]) 
 
     def region_wise_pooling(self, codes, seg):
         segmap = F.one_hot(seg+1, num_classes=self.class_num+1).permute(0,3,1,2)

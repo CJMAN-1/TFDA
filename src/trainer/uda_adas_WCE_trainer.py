@@ -131,8 +131,7 @@ class UDA_adas_trainer(Base_trainer):
                         self.label_filter.update(feat_s2t, filtered_s2t_label, f'{self.source}2{self.target}')
                         self.label_filter.update(feat_t, filtered_t_label, self.target)
 
-            ### make pseudo label
-            if self.label_filter is None:
+            elif self.label_filter is None:
                 pd_label = {}
                 with torch.no_grad():
                     self.seg_model.eval()
@@ -150,6 +149,7 @@ class UDA_adas_trainer(Base_trainer):
                 output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
                 loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.config.seg_loss_weight[0]
 
+                ### learning target imgs
                 if self.config.pl_start_iter <= iteration:
                     if type(self.label_filter).__name__ == 'BARS':
                         output_t = self.seg_model(batch['T_t']['img'])

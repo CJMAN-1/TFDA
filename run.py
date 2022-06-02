@@ -14,6 +14,7 @@ def main(config: DictConfig):
     trainer = UDA_adas_trainer(config)
     ### your code ###
     
+    #return trainer.inference(config, trainer.seg_model, trainer.origin_loader['T_v'])
     return trainer.train()
 
 

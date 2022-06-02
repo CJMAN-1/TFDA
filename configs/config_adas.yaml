@@ -20,15 +20,17 @@ ex: "test"
 description: "test"
 
 # training
+#seg_pretrained: "do not delete/mtdt-net seg training iter experminet/13-58-13_uda G->C mtdt-net without bars/Segformer.pth"
 seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
 i2i_pretrained: null
-bars_start_iter: 600
 seg_start_iter: 1 # in training code
-pl_start_iter: 1 
+pl_start_iter: 500 
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 10
 
+seg_loss_weight: [0.9, 0.1] # source2target , target
+seg_lr: 6e-5
 
 # dataset
 source_data: GTA5         # have to modify with source_dataset in defaults
