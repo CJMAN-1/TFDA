@@ -32,6 +32,7 @@ class UDA_adas_trainer(Base_trainer):
         self.datasets = [self.config.source_data, self.config.target_data]
         self.source = self.config.source_data
         self.target = self.config.target_data
+        self.class_num = self.config.class_num
 
         ### Logger
         self.LOG = utils.get_logger(__name__)
@@ -79,7 +80,7 @@ class UDA_adas_trainer(Base_trainer):
 
     def train(self) -> None:  
         self.LOG.info("All ranks are ready to train.")
-        if 0:
+        if 1:
             self.LOG.info("source only performance.")
             _, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
             self.log_performance(iou, self.valid_class)
@@ -147,18 +148,18 @@ class UDA_adas_trainer(Base_trainer):
                 ### learning cvt imgs
                 output_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
                 output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.config.seg_loss_weight[0]
+                loss_seg = self.seg_loss_set.WeightedCrossEntropy2d(output_s2t, batch['S_t']['label']) * self.config.seg_loss_weight[0]
 
                 ### learning target imgs
                 if self.config.pl_start_iter <= iteration:
                     if type(self.label_filter).__name__ == 'BARS':
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.config.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.WeightedCrossEntropy2d(output_t, filtered_t_label) * self.config.seg_loss_weight[1]
                     else : 
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, pd_label['before_filtering'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label['before_filtering']) * self.config.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.WeightedCrossEntropy2d(output_t, pd_label['before_filtering']) * self.config.seg_loss_weight[1]
 
                 ### seg - Compute gradient & optimizer step
                 self.seg_model.zero_grad()
@@ -239,7 +240,7 @@ class UDA_adas_trainer(Base_trainer):
         model = hydra.utils.instantiate(config.architecture).cuda()
 
         # criterion
-        loss_set = Base_losses()
+        loss_set = Base_losses(self.class_num)
         
         # optimizer
         optimizer = get_optimizer(config.optimizer, model.parameters())

@@ -42,3 +42,4 @@ model:
 
   datasets: ["${source_data}", "${target_data}"]
   pretrained_mtdtnet: #pretrained/mtdtnet/mtdtnet.pth
+  class_num: ${class_num}

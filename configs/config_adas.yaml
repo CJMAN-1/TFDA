@@ -21,7 +21,7 @@ description: "test"
 
 # training
 #seg_pretrained: "do not delete/mtdt-net seg training iter experminet/13-58-13_uda G->C mtdt-net without bars/Segformer.pth"
-seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
+seg_pretrained: #"pretrained/segformer/segformer_mitb5_46.75_single.pth"
 i2i_pretrained: null
 seg_start_iter: 1 # in training code
 pl_start_iter: 500 

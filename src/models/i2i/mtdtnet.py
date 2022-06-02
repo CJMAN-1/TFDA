@@ -17,7 +17,8 @@ class Mtdtnet(nn.Module):
                 generator_optimizer,
                 discriminator_optimizer,
                 datasets,  # 0: source 1~: targets
-                pretrained_mtdtnet):
+                pretrained_mtdtnet,
+                class_num):
         super(Mtdtnet, self).__init__()
         self.encoder = architecture.encoder
         self.generator = architecture.generator
@@ -29,6 +30,7 @@ class Mtdtnet(nn.Module):
         self.source = self.datasets[0]
         self.targets = self.datasets[1:]
         self.converts = [self.source+'2'+target for target in self.targets]
+        self.class_num = class_num
 
         self.init_weights(pretrained_mtdtnet)
 
@@ -36,7 +38,7 @@ class Mtdtnet(nn.Module):
         self.LOG = get_logger(__name__)
 
         ### criterion
-        self.loss_set = Mtdt_losses(self.datasets)
+        self.loss_set = Mtdt_losses(self.datasets, self.class_num)
         self.loss_weights = {}
 
         self.LOG.info(f'losses of I2I model: {loss.type}')

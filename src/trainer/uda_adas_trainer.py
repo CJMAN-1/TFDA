@@ -32,6 +32,7 @@ class UDA_adas_trainer(Base_trainer):
         self.datasets = [self.config.source_data, self.config.target_data]
         self.source = self.config.source_data
         self.target = self.config.target_data
+        self.class_num = self.config.class_num
 
         ### Logger
         self.LOG = utils.get_logger(__name__)
@@ -239,7 +240,7 @@ class UDA_adas_trainer(Base_trainer):
         model = hydra.utils.instantiate(config.architecture).cuda()
 
         # criterion
-        loss_set = Base_losses()
+        loss_set = Base_losses(self.class_num)
         
         # optimizer
         optimizer = get_optimizer(config.optimizer, model.parameters())
