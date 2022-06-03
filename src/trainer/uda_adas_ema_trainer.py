@@ -105,7 +105,7 @@ class UDA_adas_trainer(Base_trainer):
             loss_d, loss_g, loss_dict, d_recons, id_recon, cvt_imgs = self.i2i_model(imgs, labels, mode='train', return_imgs=True)
 
             ### label filtering - make pseudo label and features
-            if type(self.label_filter).__name__ == 'BARS':
+            if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
                 with torch.no_grad():
                     ### forward model
                     self.seg_ema_model.eval()
@@ -139,11 +139,11 @@ class UDA_adas_trainer(Base_trainer):
                         self.label_filter.update(feat_t, filtered_t_label, self.target)
 
             ### make pseudo label
-            elif self.label_filter is None:
+            elif (self.label_filter is None) or self.config.bars_stop_iter <= iteration:
                 pd_label = {}
                 with torch.no_grad():
-                    self.seg_model.eval()
-                    output = self.seg_model(batch['T_t']['img'], mode='infer')
+                    self.seg_ema_model.eval()
+                    output = self.seg_ema_model(batch['T_t']['img'], mode='infer')
                     pd_label['before_filtering'] = F.interpolate(output, batch['T_t']['img'].size()[2:], mode='bilinear')
                     pd_label['before_filtering'] = torch.argmax(pd_label['before_filtering'], dim=1)
                     pd_label['before_filtering'] = pd_label['before_filtering'].long()
@@ -159,7 +159,7 @@ class UDA_adas_trainer(Base_trainer):
                 
                 ### learning target imgs
                 if self.config.pl_start_iter <= iteration:
-                    if type(self.label_filter).__name__ == 'BARS':
+                    if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
                         loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.seg_loss_weight[1]

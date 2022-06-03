@@ -25,9 +25,11 @@ seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
 i2i_pretrained: null
 seg_start_iter: 1 # in training code
 pl_start_iter: 500 
+bars_stop_iter: 500
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 10
+
 
 ema_alpha: 0.999 # ema ratio of teacher model for pseudolabeling.
 seg_loss_weight: [0.9, 0.1] # source2target , target
