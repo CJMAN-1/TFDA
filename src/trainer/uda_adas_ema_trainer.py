@@ -33,6 +33,9 @@ class UDA_adas_trainer(Base_trainer):
         self.source = self.config.source_data
         self.target = self.config.target_data
         self.class_num = self.config.class_num
+        self.seg_loss_weight = self.config.seg_loss_weight
+
+        self.loss_increment = float((self.config.target_seg_loss_weight[1] - self.config.seg_loss_weight[1]) / self.config.target_seg_loss_iteration)
 
         ### Logger
         self.LOG = utils.get_logger(__name__)
@@ -50,6 +53,9 @@ class UDA_adas_trainer(Base_trainer):
         else:
             self.LOG.info("There is no trained segmentation model, Initialize a new model.")
             self.seg_model, self.seg_loss_set, self.seg_optimizer = self.init_seg_model(config.seg_model)
+        
+            ### EMA teacher
+        self.seg_ema_model = copy.deepcopy(self.seg_model)
 
             ### I2I model
         if config.get("i2i_pretrained") and os.path.isfile(config.i2i_pretrained):
@@ -80,7 +86,7 @@ class UDA_adas_trainer(Base_trainer):
 
     def train(self) -> None:  
         self.LOG.info("All ranks are ready to train.")
-        if 0:
+        if 1:
             self.LOG.info("source only performance.")
             _, iou = self.eval(self.config, self.seg_model, self.origin_loader['T_v'])
             self.log_performance(iou, self.valid_class)
@@ -102,15 +108,15 @@ class UDA_adas_trainer(Base_trainer):
             if type(self.label_filter).__name__ == 'BARS':
                 with torch.no_grad():
                     ### forward model
-                    self.seg_model.eval()
-                    _, feat_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
-                    output, feat_t = self.seg_model(batch['T_t']['img'], mode='feat')
+                    self.seg_ema_model.eval()
+                    _, feat_s2t = self.seg_ema_model(cvt_imgs[f'{self.source}2{self.target}'], mode='feat')
+                    output, feat_t = self.seg_ema_model(batch['T_t']['img'], mode='feat')
                     
                     ### make pseudo label
                     pd_label = {}
                     pd_label[f'T_GT'] = batch['T_t']['label'] # easy to compare with pseudo label
 
-                    pd_label[f'before_filtering_{self.target}'] = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear')
+                    pd_label[f'before_filtering_{self.target}'] = F.interpolate(output, batch['T_t']['img'].size()[2:], mode='bilinear')
                     pd_label[f'before_filtering_{self.target}'] = torch.argmax(pd_label[f'before_filtering_{self.target}'], dim=1)
                     pd_label[f'before_filtering_{self.target}'] = pd_label[f'before_filtering_{self.target}']
 
@@ -138,7 +144,7 @@ class UDA_adas_trainer(Base_trainer):
                 with torch.no_grad():
                     self.seg_model.eval()
                     output = self.seg_model(batch['T_t']['img'], mode='infer')
-                    pd_label['before_filtering'] = F.interpolate(output, batch['S_t']['label'].size()[1:], mode='bilinear')
+                    pd_label['before_filtering'] = F.interpolate(output, batch['T_t']['img'].size()[2:], mode='bilinear')
                     pd_label['before_filtering'] = torch.argmax(pd_label['before_filtering'], dim=1)
                     pd_label['before_filtering'] = pd_label['before_filtering'].long()
                 
@@ -149,23 +155,30 @@ class UDA_adas_trainer(Base_trainer):
                 ### learning cvt imgs
                 output_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
                 output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.config.seg_loss_weight[0]
+                loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.seg_loss_weight[0]
                 
                 ### learning target imgs
                 if self.config.pl_start_iter <= iteration:
                     if type(self.label_filter).__name__ == 'BARS':
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.config.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.seg_loss_weight[1]
                     else : 
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, pd_label['before_filtering'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label['before_filtering']) * self.config.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label['before_filtering']) * self.seg_loss_weight[1]
 
                 ### seg - Compute gradient & optimizer step
                 self.seg_model.zero_grad()
                 loss_seg.backward()
                 self.seg_optimizer.step()
+
+                ### seg - EMA teacher update
+                self.update_ema(iteration)
+
+                ### seg - adjust loss weight 
+                self.seg_loss_weight[0] -= self.loss_increment
+                self.seg_loss_weight[1] += self.loss_increment
 
             ### Tensorboard
             if iteration % self.config.tensor_interval == 0:
@@ -456,3 +469,13 @@ class UDA_adas_trainer(Base_trainer):
 
             for name, value in loss_dict.items():
                 self.writer.add_scalar(f'loss/{name}', value, iteration)
+
+    def update_ema(self, iteration):
+        alpha_teacher = min(1 - 1/ (iteration), self.config.ema_alpha)
+
+        for ema_param, param in zip(self.seg_ema_model.parameters(), self.seg_model.parameters()):
+            if not param.data.shape:
+                ema_param.data = alpha_teacher * ema_param.data + (1-alpha_teacher) * param.data
+
+            else:
+                ema_param.data[:] = alpha_teacher * ema_param[:].data[:] + (1-alpha_teacher) * param[:].data[:]

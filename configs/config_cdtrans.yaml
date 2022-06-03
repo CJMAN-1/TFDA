@@ -3,8 +3,6 @@ defaults:
   - log_dir: default.yaml
   - logger: Tensorboard.yaml
   - seg_model: Segformer.yaml
-  - i2i_model: Mtdtnet.yaml
-  - label_filtering: BARS.yaml
   - source_dataset: GTA5.yaml         # have to modify with source_data below
   - target_dataset: Cityscapes.yaml   # have to modify with target_data below
   - data_loader: default.yaml
@@ -21,18 +19,13 @@ description: "test"
 
 # training
 #seg_pretrained: "do not delete/mtdt-net seg training iter experminet/13-58-13_uda G->C mtdt-net without bars/Segformer.pth"
-seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
-i2i_pretrained: null
-seg_start_iter: 1 # in training code
+seg_pretrained: #"pretrained/segformer/segformer_mitb5_46.75_single.pth"
 pl_start_iter: 500 
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 10
 
-ema_alpha: 0.999 # ema ratio of teacher model for pseudolabeling.
-seg_loss_weight: [0.9, 0.1] # source2target , target
-target_seg_loss_weight: [0.5, 0.5] # seg_loss_weight -> target_seg_loss_weight까지 매 iteration마다 변경해라.
-target_seg_loss_iteration: 1500 # target_seg_loss_weight까지 weight를 변경하는데 필요한 iteration
+seg_loss_weight: [0.9, 0.1] # source, target
 seg_lr: 6e-5
 
 # dataset
@@ -40,7 +33,6 @@ source_data: GTA5         # have to modify with source_dataset in defaults
 target_data: Cityscapes   # have to modify with target_dataset in defaults
 img_size: [512, 1024]
 class_num: 19
-batch_size: 2
 
 # environment variable
 rand_seed: 3621
