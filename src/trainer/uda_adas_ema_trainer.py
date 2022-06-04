@@ -146,10 +146,15 @@ class UDA_adas_trainer(Base_trainer):
                     
                     self.seg_ema_model.eval()
                     output = self.seg_ema_model(batch['T_t']['img'], mode='infer')
-                    pd_label['before_filtering_{self.target}'] = F.interpolate(output, batch['T_t']['img'].size()[2:], mode='bilinear')
-                    pd_label['before_filtering_{self.target}'] = torch.argmax(pd_label['before_filtering_{self.target}'], dim=1)
-                    pd_label['before_filtering_{self.target}'] = pd_label['before_filtering_{self.target}'].long()
-                
+                    pd_label[f'before_filtering_{self.target}'] = F.interpolate(output, batch['T_t']['img'].size()[2:], mode='bilinear')
+                    pd_label[f'before_filtering_{self.target}'] = torch.argmax(pd_label[f'before_filtering_{self.target}'], dim=1)
+                    pd_label[f'before_filtering_{self.target}'] = pd_label[f'before_filtering_{self.target}'].long()
+            
+            # ### rectification artifact ignore
+            ignore_top = 40
+            ignore_bottom = 100
+            pd_label[f'before_filtering_{self.target}'][:, :ignore_top, :] = self.origin_loader['S_t'].dataset.ignore_label
+            pd_label[f'before_filtering_{self.target}'][:, -ignore_bottom:, :] = self.origin_loader['S_t'].dataset.ignore_label
 
             ### seg - Compute output
             if self.config.seg_start_iter <= iteration:
@@ -160,15 +165,15 @@ class UDA_adas_trainer(Base_trainer):
                 loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.seg_loss_weight[0]
                 
                 ### learning target imgs
-                if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
-                    if type(self.label_filter).__name__ == 'BARS':
+                if type(self.label_filter).__name__ == 'BARS':
+                    if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
                         output_t = self.seg_model(batch['T_t']['img'])
-                        output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
+                        output_t = F.interpolate(output_t, filtered_t_label.size()[1:], mode='bilinear', align_corners=False)
                         loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.seg_loss_weight[1]
                     else : 
                         output_t = self.seg_model(batch['T_t']['img'])
-                        output_t = F.interpolate(output_t, pd_label['before_filtering_{self.target}'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label['before_filtering_{self.target}']) * self.seg_loss_weight[1]
+                        output_t = F.interpolate(output_t, pd_label[f'before_filtering_{self.target}'].size()[1:], mode='bilinear', align_corners=False)
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label[f'before_filtering_{self.target}']) * self.seg_loss_weight[1]
 
                 ### seg - Compute gradient & optimizer step
                 self.seg_model.zero_grad()
@@ -266,8 +271,6 @@ class UDA_adas_trainer(Base_trainer):
     def load_i2i_model(self, checkpoint_file: str, config: DictConfig) -> Tuple[Any, Any, Any]:
         # model
         model = self.init_i2i_model(config)
-        
-
 
         model.load_state_dict(
             torch.load(checkpoint_file)

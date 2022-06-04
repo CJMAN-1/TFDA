@@ -18,6 +18,7 @@ class Base_losses():
         assert predict.size(3) == target.size(2), "{0} vs {1} ".format(predict.size(3), target.size(3))
 
         n, c, h, w = predict.size()
+
         target_mask = (target >= 0) * (target != self.ignore_label) * (target < self.class_num)
         target = target[target_mask]
         if not target.data.dim():
