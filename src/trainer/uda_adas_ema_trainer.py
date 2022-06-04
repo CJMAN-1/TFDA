@@ -105,7 +105,7 @@ class UDA_adas_trainer(Base_trainer):
             loss_d, loss_g, loss_dict, d_recons, id_recon, cvt_imgs = self.i2i_model(imgs, labels, mode='train', return_imgs=True)
 
             ### label filtering - make pseudo label and features
-            if type(self.label_filter).__name__ == 'BARS':
+            if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
                 with torch.no_grad():
                     ### forward model
                     self.seg_ema_model.eval()
@@ -139,7 +139,7 @@ class UDA_adas_trainer(Base_trainer):
                         self.label_filter.update(feat_t, filtered_t_label, self.target)
 
             ### make pseudo label
-            elif (self.label_filter is None):
+            elif (self.label_filter is None) or self.config.bars_stop_iter <= iteration:
                 pd_label = {}
                 with torch.no_grad():
                     pd_label[f'T_GT'] = batch['T_t']['label'] # easy to compare with pseudo label
@@ -157,18 +157,18 @@ class UDA_adas_trainer(Base_trainer):
                 ### learning cvt imgs
                 output_s2t = self.seg_model(cvt_imgs[f'{self.source}2{self.target}'])
                 output_s2t = F.interpolate(output_s2t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                loss_seg = self.seg_loss_set.WeightedCrossEntropy2d(output_s2t, batch['S_t']['label']) * self.seg_loss_weight[0]
+                loss_seg = self.seg_loss_set.CrossEntropy2d(output_s2t, batch['S_t']['label']) * self.seg_loss_weight[0]
                 
                 ### learning target imgs
-                if self.config.pl_start_iter <= iteration:
+                if type(self.label_filter).__name__ == 'BARS' and self.config.bars_stop_iter >= iteration:
                     if type(self.label_filter).__name__ == 'BARS':
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, batch['S_t']['label'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.WeightedCrossEntropy2d(output_t, filtered_t_label) * self.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, filtered_t_label) * self.seg_loss_weight[1]
                     else : 
                         output_t = self.seg_model(batch['T_t']['img'])
                         output_t = F.interpolate(output_t, pd_label['before_filtering_{self.target}'].size()[1:], mode='bilinear', align_corners=False)
-                        loss_seg += self.seg_loss_set.WeightedCrossEntropy2d(output_t, pd_label['before_filtering_{self.target}']) * self.seg_loss_weight[1]
+                        loss_seg += self.seg_loss_set.CrossEntropy2d(output_t, pd_label['before_filtering_{self.target}']) * self.seg_loss_weight[1]
 
                 ### seg - Compute gradient & optimizer step
                 self.seg_model.zero_grad()
