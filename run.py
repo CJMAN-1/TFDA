@@ -10,7 +10,7 @@ def main(config: DictConfig):
     os.chdir(config.work_dir)
     os.environ['HYDRA_FULL_ERROR'] = '1'
     ### your code ###
-    from src.trainer.uda_adas_ema_trainer import UDA_adas_trainer
+    from src.trainer.uda_only_pl_ema_trainer import UDA_adas_trainer
     trainer = UDA_adas_trainer(config)
     ### your code ###
     

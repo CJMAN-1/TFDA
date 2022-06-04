@@ -3,8 +3,7 @@ defaults:
   - log_dir: default.yaml
   - logger: Tensorboard.yaml
   - seg_model: Segformer.yaml
-  - i2i_model: Mtdtnet.yaml
-  - label_filtering: BARS.yaml
+  - label_filtering: None
   - source_dataset: GTA5.yaml         # have to modify with source_data below
   - target_dataset: Cityscapes.yaml   # have to modify with target_data below
   - data_loader: default.yaml
@@ -22,10 +21,7 @@ description: "test"
 # training
 #seg_pretrained: "do not delete/mtdt-net seg training iter experminet/13-58-13_uda G->C mtdt-net without bars/Segformer.pth"
 seg_pretrained: "pretrained/segformer/segformer_mitb5_46.75_single.pth"
-i2i_pretrained: null
-seg_start_iter: 1 # in training code
 pl_start_iter: 1 
-bars_stop_iter: 1
 max_iteration: 1000000
 eval_interval: 50
 tensor_interval: 50
